@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/auth_provider.dart';
 import '../providers/gate_provider.dart';
+import '../utils/error_handler.dart';
 import 'process_screen.dart';
 
 class PreInScreen extends StatefulWidget {
@@ -14,6 +17,32 @@ class PreInScreen extends StatefulWidget {
 
 class _PreInScreenState extends State<PreInScreen> {
   bool _initialized = false;
+  late TextEditingController _searchController;
+  String _searchQuery = '';
+  Timer? _debounceTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _searchController = TextEditingController();
+    _searchController.addListener(_onSearchChanged);
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    _debounceTimer?.cancel();
+    super.dispose();
+  }
+
+  void _onSearchChanged() {
+    _debounceTimer?.cancel();
+    _debounceTimer = Timer(const Duration(milliseconds: 500), () {
+      setState(() {
+        _searchQuery = _searchController.text.toLowerCase();
+      });
+    });
+  }
 
   @override
   void didChangeDependencies() {
@@ -39,7 +68,7 @@ class _PreInScreenState extends State<PreInScreen> {
         return;
       }
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
+        SnackBar(content: Text(ErrorHandler.getUserFriendlyMessage(e))),
       );
     }
   }
@@ -47,6 +76,12 @@ class _PreInScreenState extends State<PreInScreen> {
   @override
   Widget build(BuildContext context) {
     final gate = context.watch<GateProvider>();
+
+    final filteredRecords = _searchQuery.isEmpty
+        ? gate.preIn
+        : gate.preIn
+            .where((r) => r.containerNo.toLowerCase().contains(_searchQuery))
+            .toList();
 
     return Scaffold(
       appBar: AppBar(
@@ -92,6 +127,19 @@ class _PreInScreenState extends State<PreInScreen> {
               ),
             ),
             const SizedBox(height: 16),
+            // Search field
+            TextField(
+              controller: _searchController,
+              decoration: InputDecoration(
+                hintText: 'Search by container no.',
+                prefixIcon: const Icon(Icons.search),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              ),
+            ),
+            const SizedBox(height: 16),
             if (gate.isLoading)
               const Center(
                 child: Padding(
@@ -99,7 +147,7 @@ class _PreInScreenState extends State<PreInScreen> {
                   child: CircularProgressIndicator(),
                 ),
               )
-            else if (gate.preIn.isEmpty)
+            else if (filteredRecords.isEmpty)
               Center(
                 child: Padding(
                   padding: const EdgeInsets.symmetric(vertical: 32),
@@ -112,7 +160,7 @@ class _PreInScreenState extends State<PreInScreen> {
                       ),
                       const SizedBox(height: 16),
                       Text(
-                        'No pending Pre-IN records',
+                        _searchQuery.isEmpty ? 'No pending Pre-IN records' : 'No records found',
                         style: TextStyle(
                           fontSize: 16,
                           color: Colors.grey[600],
@@ -123,7 +171,7 @@ class _PreInScreenState extends State<PreInScreen> {
                 ),
               )
             else
-              ...gate.preIn.map((r) => _buildPreInCard(r, context)),
+              ...filteredRecords.map((r) => _buildPreInCard(r, context)),
           ],
         ),
       ),
@@ -179,7 +227,7 @@ class _PreInScreenState extends State<PreInScreen> {
                       r.containerNo.isEmpty ? 'N/A' : r.containerNo,
                       style: const TextStyle(
                         color: Colors.white,
-                        fontSize: 16,
+                        fontSize: 20,
                         fontWeight: FontWeight.bold,
                       ),
                       overflow: TextOverflow.ellipsis,
@@ -293,7 +341,7 @@ class _PreInScreenState extends State<PreInScreen> {
                     style: TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.bold,
-                      fontSize: 14,
+                      fontSize: 18,
                     ),
                   ),
                 ),
