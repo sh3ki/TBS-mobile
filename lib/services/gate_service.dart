@@ -34,14 +34,22 @@ class GateService {
   Future<List<LookupItem>> getStatusOptions(String username) async {
     final response =
         await ApiService.get('/mobile/gateinout/status-options');
+    print('[DEBUG] Raw Status API Response: ${response.data}');
+    print('[DEBUG] Raw Status API Data: ${response.data['data']}');
+    
     if (!response.isSuccessCode || response.data['success'] != true) {
       throw Exception(ApiService.extractMessage(response.data));
     }
 
-    return (response.data['data'] as List? ?? const [])
+    final items = (response.data['data'] as List? ?? const [])
         .whereType<Map<String, dynamic>>()
-        .map(LookupItem.fromStatusJson)
         .toList();
+    print('[DEBUG] Status Items Before Mapping: $items');
+    
+    final result = items.map(LookupItem.fromStatusJson).toList();
+    print('[DEBUG] Status Items After Mapping: $result');
+    
+    return result;
   }
 
   Future<List<LookupItem>> getSizeTypeOptions(String username) async {
@@ -67,6 +75,50 @@ class GateService {
     return (response.data['data'] as List? ?? const [])
         .whereType<Map<String, dynamic>>()
         .map(LookupItem.fromLoadTypeJson)
+        .toList();
+  }
+
+  Future<List<LookupItem>> getClassOptions(String username) async {
+    // Return hardcoded class options (A, B, C)
+    return [
+      LookupItem(id: 1, label: 'A', extra: ''),
+      LookupItem(id: 2, label: 'B', extra: ''),
+      LookupItem(id: 3, label: 'C', extra: ''),
+    ];
+  }
+
+  Future<Map<String, dynamic>> getContainerDetails({
+    required String username,
+    required String containerNo,
+    String gateStatus = 'IN',
+  }) async {
+    final response = await ApiService.get(
+      '/mobile/gateinout/container-details',
+      query: {'username': username, 'container_no': containerNo, 'gate_status': gateStatus},
+    );
+
+    if (!response.isSuccessCode || response.data['success'] != true) {
+      throw Exception(ApiService.extractMessage(response.data));
+    }
+
+    return response.data['data'] as Map<String, dynamic>? ?? {};
+  }
+
+  Future<List<Map<String, dynamic>>> searchAvailableContainers({
+    required String username,
+    required String searchTerm,
+  }) async {
+    final response = await ApiService.get(
+      '/mobile/gateinout/available-containers',
+      query: {'username': username, 'search': searchTerm},
+    );
+
+    if (!response.isSuccessCode || response.data['success'] != true) {
+      throw Exception(ApiService.extractMessage(response.data));
+    }
+
+    return (response.data['data'] as List? ?? const [])
+        .whereType<Map<String, dynamic>>()
         .toList();
   }
 
