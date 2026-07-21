@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/auth_provider.dart';
 import '../providers/gate_provider.dart';
+import '../utils/error_handler.dart';
 import 'process_screen.dart';
 
 class PreOutScreen extends StatefulWidget {
@@ -14,6 +17,32 @@ class PreOutScreen extends StatefulWidget {
 
 class _PreOutScreenState extends State<PreOutScreen> {
   bool _initialized = false;
+  late TextEditingController _searchController;
+  String _searchQuery = '';
+  Timer? _debounceTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _searchController = TextEditingController();
+    _searchController.addListener(_onSearchChanged);
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    _debounceTimer?.cancel();
+    super.dispose();
+  }
+
+  void _onSearchChanged() {
+    _debounceTimer?.cancel();
+    _debounceTimer = Timer(const Duration(milliseconds: 500), () {
+      setState(() {
+        _searchQuery = _searchController.text.toLowerCase();
+      });
+    });
+  }
 
   @override
   void didChangeDependencies() {
@@ -38,7 +67,7 @@ class _PreOutScreenState extends State<PreOutScreen> {
         return;
       }
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
+        SnackBar(content: Text(ErrorHandler.getUserFriendlyMessage(e))),
       );
     }
   }
@@ -46,6 +75,12 @@ class _PreOutScreenState extends State<PreOutScreen> {
   @override
   Widget build(BuildContext context) {
     final gate = context.watch<GateProvider>();
+
+    final filteredRecords = _searchQuery.isEmpty
+        ? gate.preOut
+        : gate.preOut
+            .where((r) => r.plateNo.toLowerCase().contains(_searchQuery))
+            .toList();
 
     return Scaffold(
       appBar: AppBar(
@@ -91,6 +126,19 @@ class _PreOutScreenState extends State<PreOutScreen> {
               ),
             ),
             const SizedBox(height: 16),
+            // Search field
+            TextField(
+              controller: _searchController,
+              decoration: InputDecoration(
+                hintText: 'Search by plate no.',
+                prefixIcon: const Icon(Icons.search),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              ),
+            ),
+            const SizedBox(height: 16),
             if (gate.isLoading)
               const Center(
                 child: Padding(
@@ -98,7 +146,7 @@ class _PreOutScreenState extends State<PreOutScreen> {
                   child: CircularProgressIndicator(),
                 ),
               )
-            else if (gate.preOut.isEmpty)
+            else if (filteredRecords.isEmpty)
               Center(
                 child: Padding(
                   padding: const EdgeInsets.symmetric(vertical: 32),
@@ -111,7 +159,7 @@ class _PreOutScreenState extends State<PreOutScreen> {
                       ),
                       const SizedBox(height: 16),
                       Text(
-                        'No pending Pre-OUT records',
+                        _searchQuery.isEmpty ? 'No pending Pre-OUT records' : 'No records found',
                         style: TextStyle(
                           fontSize: 16,
                           color: Colors.grey[600],
@@ -122,7 +170,7 @@ class _PreOutScreenState extends State<PreOutScreen> {
                 ),
               )
             else
-              ...gate.preOut.map((r) => _buildPreOutCard(r, context)),
+              ...filteredRecords.map((r) => _buildPreOutCard(r, context)),
           ],
         ),
       ),
@@ -178,7 +226,7 @@ class _PreOutScreenState extends State<PreOutScreen> {
                       r.plateNo.isEmpty ? 'N/A' : r.plateNo,
                       style: const TextStyle(
                         color: Colors.white,
-                        fontSize: 16,
+                        fontSize: 20,
                         fontWeight: FontWeight.bold,
                       ),
                       overflow: TextOverflow.ellipsis,
@@ -292,7 +340,7 @@ class _PreOutScreenState extends State<PreOutScreen> {
                     style: TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.bold,
-                      fontSize: 14,
+                      fontSize: 18,
                     ),
                   ),
                 ),
