@@ -17,7 +17,7 @@ class _SplashScreenState extends State<SplashScreen> {
   @override
   void initState() {
     super.initState();
-    _bootstrap();
+    Future.microtask(_bootstrap);
   }
 
   Future<void> _bootstrap() async {
