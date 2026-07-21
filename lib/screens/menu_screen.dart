@@ -189,18 +189,15 @@ class MenuScreen extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         child: Container(
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: color,
             borderRadius: BorderRadius.circular(12),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withOpacity(0.05),
+                color: Colors.black.withOpacity(0.15),
                 blurRadius: 4,
                 offset: const Offset(0, 2),
               ),
             ],
-            border: Border.all(
-              color: Colors.grey[200]!,
-            ),
           ),
           padding: const EdgeInsets.all(16),
           child: Row(
@@ -209,13 +206,13 @@ class MenuScreen extends StatelessWidget {
                 width: 56,
                 height: 56,
                 decoration: BoxDecoration(
-                  color: color.withOpacity(0.1),
+                  color: Colors.white.withOpacity(0.25),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Center(
                   child: Icon(
                     icon,
-                    color: color,
+                    color: Colors.white,
                     size: 28,
                   ),
                 ),
@@ -230,24 +227,24 @@ class MenuScreen extends StatelessWidget {
                       style: const TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w600,
-                        color: Color(0xFF31393C),
+                        color: Colors.white,
                       ),
                     ),
                     const SizedBox(height: 4),
                     Text(
                       subtitle,
-                      style: TextStyle(
+                      style: const TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w400,
-                        color: Colors.grey[600],
+                        color: Colors.white,
                       ),
                     ),
                   ],
                 ),
               ),
-              Icon(
+              const Icon(
                 Icons.arrow_forward_ios,
-                color: Colors.grey[400],
+                color: Colors.white,
                 size: 18,
               ),
             ],
