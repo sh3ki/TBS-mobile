@@ -1,11 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'dart:async';
+import 'dart:io';
 
 import '../models/lookup_item.dart';
 import '../models/pre_record_model.dart';
 import '../providers/auth_provider.dart';
 import '../services/gate_service.dart';
+import '../services/image_upload_service.dart';
+import '../services/image_provider_service.dart';
+import '../screens/continuous_camera_screen.dart';
 import '../utils/error_handler.dart';
 
 class ProcessScreen extends StatefulWidget {
@@ -47,9 +51,17 @@ class ContainerSearchResult {
 
 class _ProcessScreenState extends State<ProcessScreen> {
   final GateService _gateService = GateService();
+  final ImageUploadService _imageUploadService = ImageUploadService();
+  final _imageProvider = ImageProviderService();
+
   Timer? _searchDebounce;
   final _containerSearchKey = GlobalKey();
   OverlayEntry? _dropdownOverlay;
+
+  // Image Upload Variables
+  bool _uploadingImages = false;
+  double _uploadProgress = 0.0;
+  bool _showUploadProgress = false;
 
   // Gate IN Controllers
   final _containerNoIn = TextEditingController();
@@ -96,6 +108,10 @@ class _ProcessScreenState extends State<ProcessScreen> {
   // Gate OUT - Plate number and Hauler
   String _plateNoOut = '';
   String _haulerOut = '';
+
+  // Gate OUT - Additional details from inventory
+  String _approvalNotesOut = '';
+  String _gateInRemarksOut = '';
 
   bool get _isOut => widget.record.gateStatus.toUpperCase() == 'OUT';
 
@@ -311,6 +327,13 @@ class _ProcessScreenState extends State<ProcessScreen> {
               _statusOptions.any((opt) => opt.id == containerStatusId)) {
             _selectedStatusOut = containerStatusId;
           }
+
+          // Set approval notes from inventory
+          _approvalNotesOut =
+              details['approval_notes']?.toString().trim() ?? '';
+
+          // Set gate in remarks from inventory remarks field
+          _gateInRemarksOut = details['remarks']?.toString().trim() ?? '';
 
           // Set remarks from pre_inventory
           _remarksOut.text =
@@ -579,6 +602,13 @@ class _ProcessScreenState extends State<ProcessScreen> {
 
       if (mounted) {
         setState(() {
+          // Set approval notes from inventory
+          _approvalNotesOut =
+              details['approval_notes']?.toString().trim() ?? '';
+
+          // Set gate in remarks from inventory remarks field
+          _gateInRemarksOut = details['remarks']?.toString().trim() ?? '';
+
           // Set remarks from pre_inventory
           _remarksOut.text =
               details['pre_inventory_remarks']?.toString().trim() ?? '';
@@ -596,6 +626,295 @@ class _ProcessScreenState extends State<ProcessScreen> {
     } catch (e) {
       print('DEBUG: Error fetching container details for Gate OUT: $e');
     }
+  }
+
+  Future<void> _openCameraScreen() async {
+    try {
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) => const ContinuousCameraScreen(maxImages: 100),
+        ),
+      );
+      // Images are stored in provider, no need to return them
+      if (mounted) {
+        setState(() {}); // Rebuild to show updated images
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error opening camera: ${e.toString()}')),
+        );
+      }
+    }
+  }
+
+  Future<void> _uploadImages() async {
+    if (_imageProvider.images.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No images to upload')),
+      );
+      return;
+    }
+
+    String containerNo =
+        _isOut ? _containerNoOut.text.trim() : _containerNoIn.text.trim();
+    if (containerNo.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('Container number is required to upload images')),
+      );
+      return;
+    }
+
+    setState(() {
+      _uploadingImages = true;
+      _showUploadProgress = true;
+      _uploadProgress = 0.0;
+    });
+
+    try {
+      // Show 5-second upload feedback
+      await Future.delayed(const Duration(seconds: 5));
+
+      // Start background upload
+      _imageUploadService.uploadInBackground(
+        containerNo: containerNo,
+        gateStatus: _isOut ? 'out' : 'in',
+        images: _imageProvider.images,
+      );
+
+      if (mounted) {
+        setState(() {
+          _uploadingImages = false;
+          _showUploadProgress = false;
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Images uploading in background'),
+            duration: Duration(seconds: 3),
+          ),
+        );
+
+        // Clear images after upload initiated
+        Future.delayed(const Duration(milliseconds: 500), () {
+          if (mounted) {
+            _imageProvider.clearAll();
+            setState(() {});
+          }
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _uploadingImages = false;
+          _showUploadProgress = false;
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Upload error: ${e.toString()}')),
+        );
+      }
+    }
+  }
+
+  void _deleteImage(int index) {
+    _imageProvider.removeImage(index);
+    setState(() {});
+  }
+
+  Widget _buildCameraSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Camera Button
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton.icon(
+            icon: const Icon(Icons.camera_alt),
+            label: const Text('Open Camera'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.blue,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              foregroundColor: Colors.white,
+            ),
+            onPressed: _openCameraScreen,
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        // Image Count
+        if (_imageProvider.images.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Pictures taken: ${_imageProvider.count}/100',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                    color: Colors.blue,
+                  ),
+                ),
+                if (_imageProvider.count > 0)
+                  TextButton.icon(
+                    icon: const Icon(Icons.delete, size: 18),
+                    label: const Text('Clear All'),
+                    onPressed: () {
+                      _imageProvider.clearAll();
+                      setState(() {});
+                    },
+                    style: TextButton.styleFrom(
+                      foregroundColor: Colors.red,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+
+        // Upload Button
+        if (_imageProvider.images.isNotEmpty)
+          Column(
+            children: [
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  icon: _uploadingImages
+                      ? const SizedBox(
+                          height: 20,
+                          width: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor:
+                                AlwaysStoppedAnimation<Color>(Colors.white),
+                          ),
+                        )
+                      : const Icon(Icons.cloud_upload),
+                  label: Text(
+                      _uploadingImages ? 'Uploading...' : 'Upload Pictures'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: _uploadingImages ? null : _uploadImages,
+                ),
+              ),
+              const SizedBox(height: 16),
+
+              // Upload Progress
+              if (_showUploadProgress)
+                Column(
+                  children: [
+                    LinearProgressIndicator(value: _uploadProgress),
+                    const SizedBox(height: 8),
+                    Text(
+                      '${(_uploadProgress * 100).toStringAsFixed(0)}%',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+                ),
+            ],
+          ),
+
+        // Image Gallery - 3 Columns
+        if (_imageProvider.images.isNotEmpty)
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Gallery',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 12),
+              GridView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 3,
+                  crossAxisSpacing: 8,
+                  mainAxisSpacing: 8,
+                  childAspectRatio: 1,
+                ),
+                itemCount: _imageProvider.images.length,
+                itemBuilder: (context, index) {
+                  return Stack(
+                    children: [
+                      Container(
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.grey[300]!),
+                        ),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Image.file(
+                            _imageProvider.images[index],
+                            fit: BoxFit.cover,
+                          ),
+                        ),
+                      ),
+                      Positioned(
+                        top: 0,
+                        right: 0,
+                        child: GestureDetector(
+                          onTap: () => _deleteImage(index),
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: Colors.red,
+                              borderRadius: const BorderRadius.only(
+                                topRight: Radius.circular(8),
+                                bottomLeft: Radius.circular(8),
+                              ),
+                            ),
+                            padding: const EdgeInsets.all(3),
+                            child: const Icon(
+                              Icons.close,
+                              color: Colors.white,
+                              size: 12,
+                            ),
+                          ),
+                        ),
+                      ),
+                      Positioned(
+                        bottom: 4,
+                        left: 4,
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: Colors.black.withOpacity(0.6),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
+                          child: Text(
+                            '${index + 1}',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
+              const SizedBox(height: 24),
+            ],
+          ),
+      ],
+    );
   }
 
   Future<void> _submit() async {
@@ -723,6 +1042,11 @@ class _ProcessScreenState extends State<ProcessScreen> {
 
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text(message)));
+
+      // Add a delay to allow snackbar to be shown before popping
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      if (!mounted) return;
       Navigator.of(context).pop(true);
     } catch (e) {
       if (mounted) {
@@ -1016,6 +1340,36 @@ class _ProcessScreenState extends State<ProcessScreen> {
                     ),
                     const SizedBox(height: 16),
 
+                    // Approval Remarks (Read-only)
+                    Text(
+                      'Approval Remarks',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: Colors.grey[700],
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    _buildTextField(
+                        '', TextEditingController(text: _approvalNotesOut),
+                        enabled: false, maxLines: 3),
+                    const SizedBox(height: 16),
+
+                    // Gate IN Remarks (Read-only)
+                    Text(
+                      'Gate IN Remarks',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: Colors.grey[700],
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    _buildTextField(
+                        '', TextEditingController(text: _gateInRemarksOut),
+                        enabled: false, maxLines: 3),
+                    const SizedBox(height: 16),
+
                     // Remarks (Editable)
                     Text(
                       'Remarks *',
@@ -1193,6 +1547,11 @@ class _ProcessScreenState extends State<ProcessScreen> {
                     const SizedBox(height: 4),
                     _buildTextField('', _remarksIn, maxLines: 4),
                   ],
+
+                  const SizedBox(height: 24),
+
+                  // Camera Section
+                  _buildCameraSection(),
 
                   const SizedBox(height: 24),
                   SizedBox(
