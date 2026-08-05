@@ -79,7 +79,16 @@ class _ProcessScreenState extends State<ProcessScreen> {
 
   bool _loading = false;
   bool _submitting = false;
+  bool _cameraEnabled = false;
+  // Camera is only allowed after a successful submit
+  bool _allowCamera = false;
   bool _showContainerDropdown = false;
+  // Tracks whether the user has edited key fields since the last fetch/load
+  bool _userEdited = false;
+  // If true, the next fetch was triggered by a user selecting from the dropdown
+  bool _lastFetchFromSelection = false;
+  bool _isoFetched = false;
+  bool _containerFetched = false;
   List<ContainerSearchResult> _containerSearchResults = [];
   int? _selectedContainerId;
 
@@ -122,7 +131,11 @@ class _ProcessScreenState extends State<ProcessScreen> {
     super.initState();
     if (_isOut) {
       // Initialize Gate OUT fields from PreRecord
-      _containerNoOut.text = widget.record.containerNo;
+      // Only pre-fill container number when it's a valid, non-placeholder value.
+      final containerNoFromRecord = widget.record.containerNo?.toString().trim() ?? '';
+      if (containerNoFromRecord.isNotEmpty && containerNoFromRecord != '-' && containerNoFromRecord.toLowerCase() != 'record not found') {
+        _containerNoOut.text = containerNoFromRecord;
+      }
       _plateNoOut = widget.record.plateNo;
       _haulerOut = widget.record.hauler;
       // Get current user as checker
@@ -140,6 +153,38 @@ class _ProcessScreenState extends State<ProcessScreen> {
     _loadLookups();
     if (!_isOut) {
       _loadContainerDetails();
+    }
+    // Mark as user-edited when the user changes key fields (disables fetched-based camera)
+    _containerNoIn.addListener(() {
+      if (mounted) {
+        _userEdited = true;
+        _allowCamera = false;
+        _updateCameraEnabled();
+      }
+    });
+    _containerNoOut.addListener(() {
+      if (mounted) {
+        _userEdited = true;
+        _allowCamera = false;
+        _updateCameraEnabled();
+      }
+    });
+    _isoCodeIn.addListener(() {
+      if (mounted) {
+        _userEdited = true;
+        _allowCamera = false;
+        _updateCameraEnabled();
+      }
+    });
+    // Initialize camera enabled state (will be updated after loads)
+    _updateCameraEnabled();
+  }
+
+  void _updateCameraEnabled() {
+    final fetchedEnabled = _isOut ? _containerFetched : (_isoFetched || _containerFetched);
+    final enabled = _allowCamera || (fetchedEnabled && !_userEdited);
+    if (mounted) {
+      setState(() => _cameraEnabled = enabled);
     }
   }
 
@@ -206,6 +251,7 @@ class _ProcessScreenState extends State<ProcessScreen> {
           // Set ISO code - ensure it's not null and trim whitespace
           final isoCode = details['iso_code']?.toString().trim() ?? '';
           _isoCodeIn.text = isoCode;
+          _isoFetched = isoCode.isNotEmpty && isoCode != '-' && isoCode.toLowerCase() != 'record not found';
 
           // Set date manufactured (format: MM/YYYY from database date)
           final dateMnfg = details['date_mnfg']?.toString().trim();
@@ -265,6 +311,9 @@ class _ProcessScreenState extends State<ProcessScreen> {
           }
           // If API doesn't return valid status, leave _selectedStatusIn as null (no selection)
         });
+        // Mark that these values came from a fetch/load, not from user typing
+        _userEdited = false;
+        _updateCameraEnabled();
       }
     } catch (e) {
       if (mounted) {
@@ -299,6 +348,7 @@ class _ProcessScreenState extends State<ProcessScreen> {
           // Set ISO code
           final isoCode = details['iso_code']?.toString().trim() ?? '';
           _isoCodeOut.text = isoCode;
+          _containerFetched = _hasValidContainerDetails(details);
 
           // Set size type ONLY if valid
           final sizeTypeId =
@@ -341,6 +391,9 @@ class _ProcessScreenState extends State<ProcessScreen> {
           _remarksOut.text =
               details['pre_inventory_remarks']?.toString().trim() ?? '';
         });
+        // Mark that these values came from a fetch/load, not from user typing
+        _userEdited = false;
+        _updateCameraEnabled();
       }
     } catch (e) {
       print('DEBUG: Error loading Gate OUT container details: $e');
@@ -473,6 +526,26 @@ class _ProcessScreenState extends State<ProcessScreen> {
     return '$year-$month-01';
   }
 
+  bool _hasValidContainerDetails(Map details) {
+    if (details.isEmpty) return false;
+    
+    // Check for error indicators
+    final error = details['error']?.toString().toLowerCase() ?? '';
+    if (error.contains('not found') || error.contains('no record')) return false;
+    
+    final iso = details['iso_code']?.toString().trim() ?? '';
+    if (iso.toLowerCase().contains('not found') || iso == '-') return false;
+    
+    final clientId = int.tryParse(details['client_id']?.toString() ?? '0') ?? 0;
+    final containerStatus =
+        int.tryParse(details['container_status']?.toString() ?? '0') ?? 0;
+    
+    // Only valid if we have at least client data or status data (not just empty ISO code)
+    if (clientId > 0 || containerStatus > 0) return true;
+    if (iso.isNotEmpty) return true;
+    return false;
+  }
+
   bool _handleGalleryScrollNotification(ScrollNotification notification) {
     if (notification is OverscrollNotification &&
         _formScrollController.hasClients) {
@@ -567,6 +640,11 @@ class _ProcessScreenState extends State<ProcessScreen> {
   void _handleContainerSearchChange(String value) {
     // Debounce the search - only trigger after 3+ characters
     _searchDebounce?.cancel();
+    // Editing search should disable camera until a successful submit
+    if (mounted) {
+      _allowCamera = false;
+      _updateCameraEnabled();
+    }
     if (value.length >= 3) {
       _searchDebounce = Timer(const Duration(milliseconds: 500), () {
         _searchContainers(value);
@@ -588,6 +666,8 @@ class _ProcessScreenState extends State<ProcessScreen> {
       _isoCodeOut.text = container.isoCode;
       _plateNoOut = container.plateNo;
       _haulerOut = container.hauler;
+      // When user selects from search, treat container as not yet fetched/saved
+      _containerFetched = false;
 
       // Convert className (A, B, C) to class integer (1, 2, 3)
       if (container.className == 'A') {
@@ -601,8 +681,15 @@ class _ProcessScreenState extends State<ProcessScreen> {
       }
 
       _gateInRemarks.text = container.gateInRemarks;
+      // When user selects from search, treat container as not yet fetched/saved
+      _containerFetched = false;
+      _cameraEnabled = false;
+      _allowCamera = false;
+      _updateCameraEnabled();
     });
 
+    // Mark that the upcoming fetch was triggered by a user selection
+    _lastFetchFromSelection = true;
     // Fetch additional container details from inventory
     _fetchContainerDetailsForGateOut(container.containerNo);
   }
@@ -641,7 +728,16 @@ class _ProcessScreenState extends State<ProcessScreen> {
               _statusOptions.any((opt) => opt.id == containerStatusId)) {
             _selectedStatusOut = containerStatusId;
           }
+          // Only consider container as "fetched" when API returned meaningful data
+          _containerFetched = _hasValidContainerDetails(details);
         });
+        // If this fetch was NOT triggered by a user selection, mark that
+        // values came from a fetch/load so fetched-based camera enabling can apply.
+        if (!_lastFetchFromSelection) {
+          _userEdited = false;
+        }
+        _lastFetchFromSelection = false;
+        _updateCameraEnabled();
       }
     } catch (e) {
       print('DEBUG: Error fetching container details for Gate OUT: $e');
@@ -783,7 +879,7 @@ class _ProcessScreenState extends State<ProcessScreen> {
               padding: const EdgeInsets.symmetric(vertical: 14),
               foregroundColor: Colors.white,
             ),
-            onPressed: _openCameraScreen,
+            onPressed: _cameraEnabled ? _openCameraScreen : null,
           ),
         ),
         const SizedBox(height: 16),
@@ -1122,7 +1218,20 @@ class _ProcessScreenState extends State<ProcessScreen> {
       await Future.delayed(const Duration(milliseconds: 500));
 
       if (!mounted) return;
-      Navigator.of(context).pop(true);
+      // Stay on the process screen; enable camera after successful submit
+      if (mounted) {
+        setState(() {
+          if (_isOut) {
+            _containerFetched = true;
+          } else {
+            _isoFetched = true;
+          }
+          // Allow camera only after a successful submit
+          _allowCamera = true;
+          _userEdited = false;
+        });
+        _updateCameraEnabled();
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
