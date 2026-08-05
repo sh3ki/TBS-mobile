@@ -53,6 +53,8 @@ class _ProcessScreenState extends State<ProcessScreen> {
   final GateService _gateService = GateService();
   final ImageUploadService _imageUploadService = ImageUploadService();
   final _imageProvider = ImageProviderService();
+  final ScrollController _formScrollController = ScrollController();
+  final ScrollController _galleryScrollController = ScrollController();
 
   Timer? _searchDebounce;
   final _containerSearchKey = GlobalKey();
@@ -471,10 +473,28 @@ class _ProcessScreenState extends State<ProcessScreen> {
     return '$year-$month-01';
   }
 
+  bool _handleGalleryScrollNotification(ScrollNotification notification) {
+    if (notification is OverscrollNotification &&
+        _formScrollController.hasClients) {
+      final parentPosition = _formScrollController.position;
+      final nextOffset = (parentPosition.pixels + notification.overscroll)
+          .clamp(parentPosition.minScrollExtent, parentPosition.maxScrollExtent)
+          .toDouble();
+
+      if (nextOffset != parentPosition.pixels) {
+        _formScrollController.jumpTo(nextOffset);
+      }
+    }
+
+    return false;
+  }
+
   @override
   void dispose() {
     _searchDebounce?.cancel();
     _dropdownOverlay?.remove();
+    _formScrollController.dispose();
+    _galleryScrollController.dispose();
     _containerNoIn.dispose();
     _dateManufactured.dispose();
     _isoCodeIn.dispose();
@@ -727,6 +747,31 @@ class _ProcessScreenState extends State<ProcessScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        // Submit Button
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.green,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              foregroundColor: Colors.white,
+            ),
+            onPressed: _submitting ? null : _submit,
+            icon: _submitting
+                ? const SizedBox(
+                    height: 18,
+                    width: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                    ),
+                  )
+                : const Icon(Icons.check_circle_outline),
+            label: Text(_submitting ? 'Submitting...' : 'Submit'),
+          ),
+        ),
+        const SizedBox(height: 12),
+
         // Camera Button
         SizedBox(
           width: double.infinity,
@@ -836,77 +881,107 @@ class _ProcessScreenState extends State<ProcessScreen> {
                 ),
               ),
               const SizedBox(height: 12),
-              GridView.builder(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 3,
-                  crossAxisSpacing: 8,
-                  mainAxisSpacing: 8,
-                  childAspectRatio: 1,
-                ),
-                itemCount: _imageProvider.images.length,
-                itemBuilder: (context, index) {
-                  return Stack(
-                    children: [
-                      Container(
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: Colors.grey[300]!),
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  const crossAxisCount = 3;
+                  const spacing = 8.0;
+                  const tileAspectRatio = 3 / 4;
+                  const visibleRows = 3;
+
+                  final tileWidth = (constraints.maxWidth -
+                          ((crossAxisCount - 1) * spacing)) /
+                      crossAxisCount;
+                  final tileHeight = tileWidth / tileAspectRatio;
+                  final maxPreviewHeight = (tileHeight * visibleRows) +
+                      (spacing * (visibleRows - 1));
+
+                  return SizedBox(
+                    height: maxPreviewHeight,
+                    child: NotificationListener<ScrollNotification>(
+                      onNotification: _handleGalleryScrollNotification,
+                      child: GridView.builder(
+                        controller: _galleryScrollController,
+                        primary: false,
+                        physics: const ClampingScrollPhysics(),
+                        gridDelegate:
+                            const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: crossAxisCount,
+                          crossAxisSpacing: spacing,
+                          mainAxisSpacing: spacing,
+                          childAspectRatio: tileAspectRatio,
                         ),
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(8),
-                          child: Image.file(
-                            _imageProvider.images[index],
-                            fit: BoxFit.cover,
-                          ),
-                        ),
-                      ),
-                      Positioned(
-                        top: 0,
-                        right: 0,
-                        child: GestureDetector(
-                          onTap: () => _deleteImage(index),
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: Colors.red,
-                              borderRadius: const BorderRadius.only(
-                                topRight: Radius.circular(8),
-                                bottomLeft: Radius.circular(8),
+                        itemCount: _imageProvider.images.length,
+                        itemBuilder: (context, index) {
+                          return Stack(
+                            clipBehavior: Clip.none,
+                            children: [
+                              Positioned.fill(
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(
+                                      color: Colors.white,
+                                      width: 2,
+                                    ),
+                                  ),
+                                  child: ClipRRect(
+                                    borderRadius: BorderRadius.circular(8),
+                                    child: Image.file(
+                                      _imageProvider.images[index],
+                                      fit: BoxFit.cover,
+                                    ),
+                                  ),
+                                ),
                               ),
-                            ),
-                            padding: const EdgeInsets.all(3),
-                            child: const Icon(
-                              Icons.close,
-                              color: Colors.white,
-                              size: 12,
-                            ),
-                          ),
-                        ),
+                              Positioned(
+                                top: 0,
+                                right: 0,
+                                child: GestureDetector(
+                                  onTap: () => _deleteImage(index),
+                                  child: Container(
+                                    decoration: const BoxDecoration(
+                                      color: Colors.red,
+                                      borderRadius: BorderRadius.only(
+                                        topRight: Radius.circular(8),
+                                        bottomLeft: Radius.circular(8),
+                                      ),
+                                    ),
+                                    padding: const EdgeInsets.all(3),
+                                    child: const Icon(
+                                      Icons.close,
+                                      color: Colors.white,
+                                      size: 12,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              Positioned(
+                                bottom: 4,
+                                left: 4,
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    color: Colors.black.withOpacity(0.7),
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 4,
+                                    vertical: 2,
+                                  ),
+                                  child: Text(
+                                    '${index + 1}',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          );
+                        },
                       ),
-                      Positioned(
-                        bottom: 4,
-                        left: 4,
-                        child: Container(
-                          decoration: BoxDecoration(
-                            color: Colors.black.withOpacity(0.6),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 6,
-                            vertical: 2,
-                          ),
-                          child: Text(
-                            '${index + 1}',
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
+                    ),
                   );
                 },
               ),
@@ -1149,6 +1224,7 @@ class _ProcessScreenState extends State<ProcessScreen> {
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : SingleChildScrollView(
+              controller: _formScrollController,
               padding: const EdgeInsets.all(16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1553,33 +1629,6 @@ class _ProcessScreenState extends State<ProcessScreen> {
                   // Camera Section
                   _buildCameraSection(),
 
-                  const SizedBox(height: 24),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: primaryColor,
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                      ),
-                      onPressed: _submitting ? null : _submit,
-                      child: _submitting
-                          ? const SizedBox(
-                              height: 20,
-                              width: 20,
-                              child: CircularProgressIndicator(
-                                  valueColor: AlwaysStoppedAnimation<Color>(
-                                      Colors.white)),
-                            )
-                          : const Text(
-                              'Submit',
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.white,
-                              ),
-                            ),
-                    ),
-                  ),
                   const SizedBox(height: 16),
                 ],
               ),
