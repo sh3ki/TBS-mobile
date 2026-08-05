@@ -255,8 +255,8 @@ class _ContinuousCameraScreenState extends State<ContinuousCameraScreen> {
 
   Widget _buildPreviewToggleHandle() {
     final icon = _isPreviewExpanded
-        ? Icons.keyboard_arrow_down
-        : Icons.keyboard_arrow_up;
+        ? Icons.keyboard_arrow_up
+        : Icons.keyboard_arrow_down;
 
     return Positioned(
       top: 12,
@@ -328,9 +328,28 @@ class _ContinuousCameraScreenState extends State<ContinuousCameraScreen> {
         title: const Text('Camera'),
         elevation: 0,
         backgroundColor: Colors.black,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: _backToProcess,
+        leading: Padding(
+          padding: const EdgeInsets.only(left: 12),
+          child: Center(
+            child: InkWell(
+              onTap: _backToProcess,
+              borderRadius: BorderRadius.circular(16),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.grey[800],
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: 2,
+                ),
+                child: const Icon(
+                  Icons.arrow_back,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ),
         ),
         actions: [
           Padding(
