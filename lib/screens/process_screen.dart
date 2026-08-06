@@ -928,6 +928,7 @@ class _ProcessScreenState extends State<ProcessScreen> {
       );
 
       // Start upload in background but keep gallery visible and cached per-container
+      final _user = context.read<AuthProvider>().user;
       _imageUploadService.uploadContainerPictures(
         containerNo: containerNo,
         gateStatus: _isOut ? 'out' : 'in',
@@ -935,6 +936,8 @@ class _ProcessScreenState extends State<ProcessScreen> {
         date: dateStr,
         uploadPath: uploadPath,
         startingIndex: lastIndex,
+        username: _user?.username,
+        userId: _user?.id,
         onProgress: (p) {
           if (mounted) setState(() => _uploadProgress = p);
         },
