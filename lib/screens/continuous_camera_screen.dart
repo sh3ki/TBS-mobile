@@ -4,15 +4,18 @@ import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:image/image.dart' as img;
 
 import '../services/image_provider_service.dart';
 
 class ContinuousCameraScreen extends StatefulWidget {
   final int maxImages;
+  final String? containerNo;
 
   const ContinuousCameraScreen({
     super.key,
     this.maxImages = 100,
+    this.containerNo,
   });
 
   @override
@@ -33,6 +36,10 @@ class _ContinuousCameraScreenState extends State<ContinuousCameraScreen> {
   void initState() {
     super.initState();
     _lockToPortrait();
+    // Set provider's current container if provided so images are cached per container
+    if (widget.containerNo != null && widget.containerNo!.trim().isNotEmpty) {
+      _imageProvider.setCurrentContainer(widget.containerNo!);
+    }
     _initializeCamera();
   }
 
@@ -92,7 +99,23 @@ class _ContinuousCameraScreenState extends State<ContinuousCameraScreen> {
 
     final timestamp = DateTime.now().millisecondsSinceEpoch;
     final savedPath = '${photosDir.path}/IMG_$timestamp.jpg';
-    return capturedFile.copy(savedPath);
+    final File copied = await capturedFile.copy(savedPath);
+
+    try {
+      // Read bytes and resize to 640x480
+      final bytes = await copied.readAsBytes();
+      final decoded = img.decodeImage(bytes);
+      if (decoded != null) {
+        final resized = img.copyResize(decoded, width: 640, height: 480);
+        final jpg = img.encodeJpg(resized, quality: 85);
+        await copied.writeAsBytes(jpg, flush: true);
+      }
+    } catch (e) {
+      // If resizing fails, keep original copied file
+      print('DEBUG: Error resizing image: $e');
+    }
+
+    return copied;
   }
 
   Future<void> _takePicture() async {
