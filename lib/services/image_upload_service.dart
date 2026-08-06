@@ -100,44 +100,67 @@ class ImageUploadService {
   }) async {
     final List<File> downloaded = [];
     try {
-      // Derive static base (strip '/api' if present)
-      final staticBase = AppConfig.baseUrl.replaceFirst(RegExp(r'\/api\/?\z'), '');
-
-      final statusFolder = (gateStatus.toLowerCase() == 'out') ? 'out' : 'in';
-      final remoteDir = uploadPath != null && uploadPath.trim().isNotEmpty
-          ? uploadPath.trim()
-          : 'container_pics/$date/$statusFolder/$containerNo';
-
-      // Local storage path
-      final appDir = await getApplicationDocumentsDirectory();
-      final localDir = Directory('${appDir.path}/$remoteDir');
-      if (!localDir.existsSync()) {
-        localDir.createSync(recursive: true);
+      // Use the server API to list container pictures for the given date/status
+      // Robustly derive public static base (strip trailing '/api' or '/api/')
+      String staticBase = AppConfig.baseUrl;
+      if (staticBase.endsWith('/api')) {
+        staticBase = staticBase.substring(0, staticBase.length - 4);
+      } else if (staticBase.endsWith('/api/')) {
+        staticBase = staticBase.substring(0, staticBase.length - 5);
       }
-
       final dio = Dio();
 
-      int consecutiveMisses = 0;
-      for (int i = 1; i <= maxToCheck; i++) {
-        final fileName = '$containerNo($i).jpg';
-        final remoteUrl = '$staticBase/$remoteDir/$fileName'.replaceAll('\\', '/');
-        try {
-          final resp = await dio.get<List<int>>(remoteUrl,
-              options: Options(responseType: ResponseType.bytes));
-          if (resp.statusCode == 200 && resp.data != null && resp.data!.isNotEmpty) {
-            final localPath = p.join(localDir.path, fileName);
-            final f = File(localPath);
-            await f.writeAsBytes(resp.data!, flush: true);
-            downloaded.add(f);
-            consecutiveMisses = 0;
-          } else {
-            consecutiveMisses++;
-          }
-        } catch (e) {
-          consecutiveMisses++;
+      final apiUrl = '${AppConfig.baseUrl}/mobile/gateinout/container-pictures';
+      final params = {
+        'container_no': containerNo,
+        'gate_status': gateStatus,
+        'date': date,
+      };
+      if (uploadPath != null && uploadPath.trim().isNotEmpty) {
+        params['upload_path'] = uploadPath.trim();
+      }
+
+      final resp = await dio.get(apiUrl, queryParameters: params);
+      print('[ImageUploadService] fetchExistingImages: GET $apiUrl -> status=${resp.statusCode}');
+      if (resp.statusCode == 200 && resp.data != null && resp.data['success'] == true) {
+        final List items = resp.data['data'] as List? ?? [];
+        print('[ImageUploadService] fetchExistingImages: server returned ${items.length} items');
+
+        // Prepare local dir base
+        final remoteDir = uploadPath != null && uploadPath.trim().isNotEmpty
+            ? uploadPath.trim()
+            : 'container_pics/$date/${(gateStatus.toLowerCase() == 'out') ? 'out' : 'in'}/$containerNo';
+        final appDir = await getApplicationDocumentsDirectory();
+        final localDir = Directory('${appDir.path}/$remoteDir');
+        if (!localDir.existsSync()) {
+          localDir.createSync(recursive: true);
         }
 
-        if (consecutiveMisses >= 3) break; // stop after 3 consecutive misses
+        for (final item in items) {
+          print('[ImageUploadService] fetchExistingImages: item=$item');
+          try {
+            final name = item['name']?.toString() ?? '';
+            final path = item['path']?.toString() ?? '';
+            if (name.isEmpty || path.isEmpty) continue;
+
+            final remoteUrl = (staticBase.replaceAll(RegExp(r'\/$'), '')) + '/' + path.replaceAll(RegExp(r'^\/'), '');
+            final normalizedRemoteUrl = remoteUrl.replaceAll('\\', '/');
+            print('[ImageUploadService] fetchExistingImages: normalized URL = $normalizedRemoteUrl');
+            print('[ImageUploadService] fetchExistingImages: downloading $normalizedRemoteUrl');
+            final res = await dio.get<List<int>>(normalizedRemoteUrl,
+                options: Options(responseType: ResponseType.bytes));
+            print('[ImageUploadService] fetchExistingImages: download status=${res.statusCode} size=${res.data?.length ?? 0}');
+            if (res.statusCode == 200 && res.data != null && res.data!.isNotEmpty) {
+              final localPath = p.join(localDir.path, name);
+              final f = File(localPath);
+              await f.writeAsBytes(res.data!, flush: true);
+              downloaded.add(f);
+            }
+          } catch (e) {
+            // ignore per-file errors and continue
+            print('[ImageUploadService] fetchExistingImages: error downloading item: $e');
+          }
+        }
       }
     } catch (e) {
       // ignore errors and return what we have
@@ -156,7 +179,12 @@ class ImageUploadService {
     int maxToCheck = 200,
   }) async {
     try {
-      final staticBase = AppConfig.baseUrl.replaceFirst(RegExp(r'\/api\/?\z'), '');
+      String staticBase = AppConfig.baseUrl;
+      if (staticBase.endsWith('/api')) {
+        staticBase = staticBase.substring(0, staticBase.length - 4);
+      } else if (staticBase.endsWith('/api/')) {
+        staticBase = staticBase.substring(0, staticBase.length - 5);
+      }
       final statusFolder = (gateStatus.toLowerCase() == 'out') ? 'out' : 'in';
       final remoteDir = uploadPath != null && uploadPath.trim().isNotEmpty
           ? uploadPath.trim()
