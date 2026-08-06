@@ -163,6 +163,11 @@ class _ProcessScreenState extends State<ProcessScreen> {
         final cno = _containerNoIn.text.trim();
         if (cno.isNotEmpty) {
           _imageProvider.setCurrentContainer(cno);
+          // Debounce refresh of uploaded images when user types/selects container
+          _searchDebounce?.cancel();
+          _searchDebounce = Timer(const Duration(milliseconds: 600), () {
+            _refreshUploadedImages();
+          });
         }
       }
     });
@@ -174,6 +179,11 @@ class _ProcessScreenState extends State<ProcessScreen> {
         final cno = _containerNoOut.text.trim();
         if (cno.isNotEmpty) {
           _imageProvider.setCurrentContainer(cno);
+          // Debounce refresh of uploaded images when user types/selects container
+          _searchDebounce?.cancel();
+          _searchDebounce = Timer(const Duration(milliseconds: 600), () {
+            _refreshUploadedImages();
+          });
         }
       }
     });
@@ -182,6 +192,8 @@ class _ProcessScreenState extends State<ProcessScreen> {
         _userEdited = true;
         _allowCamera = false;
         _updateCameraEnabled();
+        // Refresh uploaded images for this fetched container
+        WidgetsBinding.instance.addPostFrameCallback((_) => _refreshUploadedImages());
       }
     });
     // Initialize camera enabled state (will be updated after loads)
@@ -1393,6 +1405,8 @@ class _ProcessScreenState extends State<ProcessScreen> {
           _userEdited = false;
         });
         _updateCameraEnabled();
+        // After successful submit, refresh uploaded images for the (possibly new) container
+        WidgetsBinding.instance.addPostFrameCallback((_) => _refreshUploadedImages());
       }
     } catch (e) {
       if (mounted) {
