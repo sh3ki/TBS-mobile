@@ -102,11 +102,11 @@ class _ContinuousCameraScreenState extends State<ContinuousCameraScreen> {
     final File copied = await capturedFile.copy(savedPath);
 
     try {
-      // Read bytes and resize to 640x480
+      // Read bytes and resize to 480x640 (portrait)
       final bytes = await copied.readAsBytes();
       final decoded = img.decodeImage(bytes);
       if (decoded != null) {
-        final resized = img.copyResize(decoded, width: 640, height: 480);
+        final resized = img.copyResize(decoded, width: 480, height: 640);
         final jpg = img.encodeJpg(resized, quality: 85);
         await copied.writeAsBytes(jpg, flush: true);
       }
