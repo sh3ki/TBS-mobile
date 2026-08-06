@@ -5,8 +5,37 @@ import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import '../config/app_config.dart';
 
+class UploadStatus {
+  final String containerNo;
+  final double progress; // 0.0 - 1.0
+  final bool completed;
+  final bool success;
+  final String? message;
+
+  UploadStatus({
+    required this.containerNo,
+    required this.progress,
+    required this.completed,
+    required this.success,
+    this.message,
+  });
+}
+
 class ImageUploadService {
+  static final ImageUploadService _instance = ImageUploadService._internal();
+  factory ImageUploadService() => _instance;
+
+  ImageUploadService._internal() {
+  }
+
   final Dio _dio = Dio();
+  final Map<String, bool> _uploading = {};
+  final Map<String, double> _progress = {};
+  final StreamController<UploadStatus> _uploadController = StreamController<UploadStatus>.broadcast();
+
+  Stream<UploadStatus> get uploadStream => _uploadController.stream;
+
+  // notifications removed to avoid native plugin build issues; use upload stream instead
 
   /// Upload images to server
   /// Returns a Future that completes when all images are uploaded
@@ -19,6 +48,9 @@ class ImageUploadService {
     Function(double)? onProgress,
     int? startingIndex,
   }) async {
+    _uploading[containerNo] = true;
+    _progress[containerNo] = 0.0;
+    _uploadController.add(UploadStatus(containerNo: containerNo, progress: 0.0, completed: false, success: false));
     try {
       // Prepare multipart form data
       final Map<String, dynamic> map = {
@@ -55,18 +87,25 @@ class ImageUploadService {
             onSendProgress: (sent, total) {
               if (total > 0) {
                 onProgress?.call(sent / total);
+                _progress[containerNo] = sent / total;
+                _uploadController.add(UploadStatus(containerNo: containerNo, progress: _progress[containerNo] ?? 0.0, completed: false, success: false));
               }
             },
           )
           .timeout(const Duration(seconds: 300)); // 5 minutes timeout
 
       if (response.statusCode == 200) {
+          _uploading[containerNo] = false;
+          _progress[containerNo] = 1.0;
+          _uploadController.add(UploadStatus(containerNo: containerNo, progress: 1.0, completed: true, success: true, message: 'Images uploaded successfully'));
         return {
           'success': true,
           'message': 'Images uploaded successfully',
           'data': response.data,
         };
       } else {
+        _uploading[containerNo] = false;
+        _uploadController.add(UploadStatus(containerNo: containerNo, progress: _progress[containerNo] ?? 0.0, completed: true, success: false, message: 'Upload failed with status ${response.statusCode}'));
         return {
           'success': false,
           'message': 'Upload failed with status ${response.statusCode}',
@@ -74,15 +113,21 @@ class ImageUploadService {
         };
       }
     } on DioException catch (e) {
+      _uploading[containerNo] = false;
+      final msg = _extractDioErrorMessage(e);
+      _uploadController.add(UploadStatus(containerNo: containerNo, progress: _progress[containerNo] ?? 0.0, completed: true, success: false, message: msg));
       return {
         'success': false,
-        'message': _extractDioErrorMessage(e),
+        'message': msg,
         'data': null,
       };
     } catch (e) {
+      _uploading[containerNo] = false;
+      final msg = 'Error uploading images: $e';
+      _uploadController.add(UploadStatus(containerNo: containerNo, progress: _progress[containerNo] ?? 0.0, completed: true, success: false, message: msg));
       return {
         'success': false,
-        'message': 'Error uploading images: $e',
+        'message': msg,
         'data': null,
       };
     }
