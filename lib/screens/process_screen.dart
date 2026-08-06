@@ -160,6 +160,10 @@ class _ProcessScreenState extends State<ProcessScreen> {
         _userEdited = true;
         _allowCamera = false;
         _updateCameraEnabled();
+        final cno = _containerNoIn.text.trim();
+        if (cno.isNotEmpty) {
+          _imageProvider.setCurrentContainer(cno);
+        }
       }
     });
     _containerNoOut.addListener(() {
@@ -167,6 +171,10 @@ class _ProcessScreenState extends State<ProcessScreen> {
         _userEdited = true;
         _allowCamera = false;
         _updateCameraEnabled();
+        final cno = _containerNoOut.text.trim();
+        if (cno.isNotEmpty) {
+          _imageProvider.setCurrentContainer(cno);
+        }
       }
     });
     _isoCodeIn.addListener(() {
@@ -314,6 +322,25 @@ class _ProcessScreenState extends State<ProcessScreen> {
         // Mark that these values came from a fetch/load, not from user typing
         _userEdited = false;
         _updateCameraEnabled();
+        // Fetch any existing server images for this container and show them in gallery
+        try {
+          final now = DateTime.now();
+          final dateStr = "${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}-${now.year}";
+          final uploadPath = "container_pics/$dateStr/${_isOut ? 'out' : 'in'}/";
+          _imageProvider.setCurrentContainer(_containerNoIn.text.trim());
+          final files = await _imageUploadService.fetchExistingImages(
+            containerNo: _containerNoIn.text.trim(),
+            gateStatus: _isOut ? 'out' : 'in',
+            date: dateStr,
+            uploadPath: uploadPath + _containerNoIn.text.trim(),
+          );
+          if (mounted && files.isNotEmpty) {
+            for (final f in files) {
+              _imageProvider.addImage(f);
+            }
+            setState(() {});
+          }
+        } catch (_) {}
       }
     } catch (e) {
       if (mounted) {
@@ -394,6 +421,25 @@ class _ProcessScreenState extends State<ProcessScreen> {
         // Mark that these values came from a fetch/load, not from user typing
         _userEdited = false;
         _updateCameraEnabled();
+        // Fetch any existing server images for this container and show them in gallery
+        try {
+          final now = DateTime.now();
+          final dateStr = "${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}-${now.year}";
+          final uploadPath = "container_pics/$dateStr/out/";
+          _imageProvider.setCurrentContainer(_containerNoOut.text.trim());
+          final files = await _imageUploadService.fetchExistingImages(
+            containerNo: _containerNoOut.text.trim(),
+            gateStatus: 'out',
+            date: dateStr,
+            uploadPath: uploadPath + _containerNoOut.text.trim(),
+          );
+          if (mounted && files.isNotEmpty) {
+            for (final f in files) {
+              _imageProvider.addImage(f);
+            }
+            setState(() {});
+          }
+        } catch (_) {}
       }
     } catch (e) {
       print('DEBUG: Error loading Gate OUT container details: $e');
@@ -746,9 +792,10 @@ class _ProcessScreenState extends State<ProcessScreen> {
 
   Future<void> _openCameraScreen() async {
     try {
+      final containerNo = _isOut ? _containerNoOut.text.trim() : _containerNoIn.text.trim();
       await Navigator.of(context).push(
         MaterialPageRoute(
-          builder: (context) => const ContinuousCameraScreen(maxImages: 100),
+          builder: (context) => ContinuousCameraScreen(maxImages: 100, containerNo: containerNo),
         ),
       );
       // Images are stored in provider, no need to return them
@@ -792,17 +839,61 @@ class _ProcessScreenState extends State<ProcessScreen> {
       // Show 5-second upload feedback
       await Future.delayed(const Duration(seconds: 5));
 
-      // Start background upload
-      _imageUploadService.uploadInBackground(
+      // Prepare date and upload path for server-side organization
+      final now = DateTime.now();
+      final dateStr = "${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}-${now.year}";
+      final uploadPath = "container_pics/$dateStr/${_isOut ? 'out' : 'in'}/$containerNo/";
+
+      // Determine last existing image index so filenames continue incrementally
+      final lastIndex = await _imageUploadService.getLastImageIndex(
+        containerNo: containerNo,
+        gateStatus: _isOut ? 'out' : 'in',
+        date: dateStr,
+        uploadPath: uploadPath,
+      );
+
+      // Start upload in background but keep gallery visible and cached per-container
+      _imageUploadService
+          .uploadContainerPictures(
         containerNo: containerNo,
         gateStatus: _isOut ? 'out' : 'in',
         images: _imageProvider.images,
-      );
+        date: dateStr,
+        uploadPath: uploadPath,
+        startingIndex: lastIndex,
+        onProgress: (p) {
+          if (mounted) setState(() => _uploadProgress = p);
+        },
+      )
+          .then((result) {
+        if (mounted) {
+          setState(() {
+            _uploadingImages = false;
+            _showUploadProgress = false;
+          });
+
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(result['message'] ?? 'Upload finished')),
+          );
+        }
+      }).catchError((e) {
+        if (mounted) {
+          setState(() {
+            _uploadingImages = false;
+            _showUploadProgress = false;
+          });
+
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Upload error: $e')),
+          );
+        }
+      });
 
       if (mounted) {
+        // Immediately allow interaction; keep gallery (do not clear)
         setState(() {
           _uploadingImages = false;
-          _showUploadProgress = false;
+          _showUploadProgress = true; // show until background finishes
         });
 
         ScaffoldMessenger.of(context).showSnackBar(
@@ -811,14 +902,6 @@ class _ProcessScreenState extends State<ProcessScreen> {
             duration: Duration(seconds: 3),
           ),
         );
-
-        // Clear images after upload initiated
-        Future.delayed(const Duration(milliseconds: 500), () {
-          if (mounted) {
-            _imageProvider.clearAll();
-            setState(() {});
-          }
-        });
       }
     } catch (e) {
       if (mounted) {
