@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'dart:async';
 import 'dart:io';
+import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as p;
 
 import '../models/lookup_item.dart';
 import '../models/pre_record_model.dart';
@@ -64,6 +66,7 @@ class _ProcessScreenState extends State<ProcessScreen> {
   bool _uploadingImages = false;
   double _uploadProgress = 0.0;
   bool _showUploadProgress = false;
+  StreamSubscription? _uploadSubscription;
 
   // Gate IN Controllers
   final _containerNoIn = TextEditingController();
@@ -151,6 +154,32 @@ class _ProcessScreenState extends State<ProcessScreen> {
       _containerNoIn.text = widget.record.containerNo;
       _clientIdIn = widget.record.clientId;
     }
+    // If container was provided from previous screen (pre-in / pre-out), set provider
+    final initialCno = _isOut ? _containerNoOut.text.trim() : _containerNoIn.text.trim();
+    if (initialCno.isNotEmpty) {
+      _imageProvider.setCurrentContainer(initialCno);
+      // Trigger guarded refresh to load cached uploaded images immediately
+      WidgetsBinding.instance.addPostFrameCallback((_) => _refreshUploadedImages());
+
+      // Listen for upload progress/completion events so UI stays disabled until finished
+      _uploadSubscription = _imageUploadService.uploadStream.listen((status) {
+        final containerNo = _isOut ? _containerNoOut.text.trim() : _containerNoIn.text.trim();
+        if (status.containerNo == containerNo) {
+          if (mounted) {
+            setState(() {
+              _uploadProgress = status.progress;
+              _showUploadProgress = !status.completed;
+              _uploadingImages = !status.completed;
+            });
+            if (status.completed) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text(status.message ?? 'Upload completed')),
+              );
+            }
+          }
+        }
+      });
+    }
     _loadLookups();
     if (!_isOut) {
       _loadContainerDetails();
@@ -220,19 +249,27 @@ class _ProcessScreenState extends State<ProcessScreen> {
       _refreshingUploadedImages = true;
 
       try {
-        // Probe server for last existing image index. If cached count matches, skip fetching.
-        final lastIndex = await _imageUploadService.getLastImageIndex(
-          containerNo: containerNo,
-          gateStatus: _isOut ? 'out' : 'in',
-          date: dateStr,
-          uploadPath: uploadPath + containerNo,
-        );
-
-        final cachedCount = _imageProvider.uploadedImages.length;
-        if (lastIndex > 0 && cachedCount == lastIndex) {
-          return;
+        // First, try to load any locally cached files for this container to display immediately
+        try {
+          final appDir = await getApplicationDocumentsDirectory();
+          final localDir = Directory(p.join(appDir.path, uploadPath, containerNo));
+          if (localDir.existsSync()) {
+            final localFiles = localDir
+                .listSync()
+                .whereType<File>()
+                .toList()
+                ..sort((a, b) => a.path.compareTo(b.path));
+            if (localFiles.isNotEmpty) {
+              _imageProvider.addUploadedImages(localFiles);
+              if (mounted) setState(() {});
+              // We have a local cache — by design skip contacting the server to keep opening fast.
+              return;
+            }
+          }
+        } catch (e) {
+          // ignore local cache read errors
         }
-
+        // No local cache found — fetch server list and download files (first-time load)
         final files = await _imageUploadService.fetchExistingImages(
           containerNo: containerNo,
           gateStatus: _isOut ? 'out' : 'in',
@@ -384,7 +421,7 @@ class _ProcessScreenState extends State<ProcessScreen> {
         // Mark that these values came from a fetch/load, not from user typing
         _userEdited = false;
         _updateCameraEnabled();
-        // Fetch any existing server images for this container and show them in gallery
+        // Load cached uploaded images (or fetch if none) via centralized refresh
         try {
           _imageProvider.setCurrentContainer(_containerNoIn.text.trim());
           await _refreshUploadedImages();
@@ -469,7 +506,7 @@ class _ProcessScreenState extends State<ProcessScreen> {
         // Mark that these values came from a fetch/load, not from user typing
         _userEdited = false;
         _updateCameraEnabled();
-        // Fetch any existing server images for this container and show them in gallery
+        // Load cached uploaded images (or fetch if none) via centralized refresh
         try {
           _imageProvider.setCurrentContainer(_containerNoOut.text.trim());
           await _refreshUploadedImages();
@@ -646,6 +683,7 @@ class _ProcessScreenState extends State<ProcessScreen> {
   void dispose() {
     _searchDebounce?.cancel();
     _dropdownOverlay?.remove();
+    _uploadSubscription?.cancel();
     _formScrollController.dispose();
     _galleryScrollController.dispose();
     _containerNoIn.dispose();
@@ -890,8 +928,7 @@ class _ProcessScreenState extends State<ProcessScreen> {
       );
 
       // Start upload in background but keep gallery visible and cached per-container
-      _imageUploadService
-          .uploadContainerPictures(
+      _imageUploadService.uploadContainerPictures(
         containerNo: containerNo,
         gateStatus: _isOut ? 'out' : 'in',
         images: imagesToUpload,
@@ -901,38 +938,56 @@ class _ProcessScreenState extends State<ProcessScreen> {
         onProgress: (p) {
           if (mounted) setState(() => _uploadProgress = p);
         },
-      )
-          .then((result) {
-        if (mounted) {
-          setState(() {
-            _uploadingImages = false;
-            _showUploadProgress = false;
-          });
+      ).then((result) async {
+        // Always process cache update even if the screen is no longer mounted
+        try {
+          final success = result['success'] == true;
+          if (success) {
+            final appDir = await getApplicationDocumentsDirectory();
+            final localDirPath = p.join(appDir.path, uploadPath);
+            final localDir = Directory(localDirPath);
+            if (!localDir.existsSync()) localDir.createSync(recursive: true);
 
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(result['message'] ?? 'Upload finished')),
-          );
-
-          // On successful upload, move the uploaded images from camera gallery
-          // into the Uploaded gallery so they appear in the "Uploaded" section.
-          try {
-            final success = result['success'] == true;
-            if (success) {
-              _imageProvider.addUploadedImages(imagesToUpload);
-              for (final f in imagesToUpload) {
-                _imageProvider.removeImageByFile(f);
+            int idx = lastIndex;
+            final List<File> movedFiles = [];
+            for (final f in imagesToUpload) {
+              idx += 1;
+              final newName = '$containerNo($idx).jpg';
+              final dest = File(p.join(localDir.path, newName));
+              try {
+                final copied = await f.copy(dest.path);
+                movedFiles.add(copied);
+              } catch (_) {
+                try {
+                  final renamed = await f.rename(dest.path);
+                  movedFiles.add(renamed);
+                } catch (_) {}
               }
-              if (mounted) setState(() {});
             }
-          } catch (_) {}
+
+            if (movedFiles.isNotEmpty) {
+              _imageProvider.addUploadedImages(movedFiles);
+            } else {
+              _imageProvider.addUploadedImages(imagesToUpload);
+            }
+
+            for (final f in imagesToUpload) {
+              _imageProvider.removeImageByFile(f);
+            }
+          }
+        } catch (_) {
+          _imageProvider.addUploadedImages(imagesToUpload);
+          for (final f in imagesToUpload) {
+            _imageProvider.removeImageByFile(f);
+          }
+        }
+
+        // UI feedback if still mounted (upload stream also shows a SnackBar)
+        if (mounted) {
+          setState(() {});
         }
       }).catchError((e) {
         if (mounted) {
-          setState(() {
-            _uploadingImages = false;
-            _showUploadProgress = false;
-          });
-
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('Upload error: $e')),
           );
@@ -940,12 +995,7 @@ class _ProcessScreenState extends State<ProcessScreen> {
       });
 
       if (mounted) {
-        // Immediately allow interaction; keep gallery (do not clear)
-        setState(() {
-          _uploadingImages = false;
-          _showUploadProgress = true; // show until background finishes
-        });
-
+        // Keep buttons disabled until upload completes; just show an informational message
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Images uploading in background'),
@@ -985,8 +1035,8 @@ class _ProcessScreenState extends State<ProcessScreen> {
               padding: const EdgeInsets.symmetric(vertical: 14),
               foregroundColor: Colors.white,
             ),
-            onPressed: _submitting ? null : _submit,
-            icon: _submitting
+            onPressed: (_submitting || _uploadingImages) ? null : _submit,
+            icon: _submitting || _uploadingImages
                 ? const SizedBox(
                     height: 18,
                     width: 18,
@@ -996,7 +1046,7 @@ class _ProcessScreenState extends State<ProcessScreen> {
                     ),
                   )
                 : const Icon(Icons.check_circle_outline),
-            label: Text(_submitting ? 'Submitting...' : 'Submit'),
+            label: Text(_submitting ? 'Submitting...' : (_uploadingImages ? 'Uploading...' : 'Submit')),
           ),
         ),
         const SizedBox(height: 12),
@@ -1118,16 +1168,41 @@ class _ProcessScreenState extends State<ProcessScreen> {
                   separatorBuilder: (_, __) => const SizedBox(width: 8),
                   itemBuilder: (context, index) {
                     final file = _imageProvider.uploadedImages[index];
-                    return Container(
-                      width: 100,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: Colors.white, width: 2),
-                      ),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
-                        child: Image.file(file, fit: BoxFit.cover),
-                      ),
+                    return Stack(
+                      clipBehavior: Clip.none,
+                      children: [
+                        Container(
+                          width: 100,
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.white, width: 2),
+                          ),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: Image.file(file, fit: BoxFit.cover),
+                          ),
+                        ),
+                        Positioned(
+                          bottom: 4,
+                          left: 6,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(0.7),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 2),
+                            child: Text(
+                              '${index + 1}',
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                     );
                   },
                 ),
