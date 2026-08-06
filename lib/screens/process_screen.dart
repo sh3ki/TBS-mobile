@@ -89,6 +89,7 @@ class _ProcessScreenState extends State<ProcessScreen> {
   bool _lastFetchFromSelection = false;
   bool _isoFetched = false;
   bool _containerFetched = false;
+  bool _refreshingUploadedImages = false;
   List<ContainerSearchResult> _containerSearchResults = [];
   int? _selectedContainerId;
 
@@ -214,16 +215,37 @@ class _ProcessScreenState extends State<ProcessScreen> {
       final dateStr = "${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}-${now.year}";
       final uploadPath = "container_pics/$dateStr/${_isOut ? 'out' : 'in'}/";
 
-      final files = await _imageUploadService.fetchExistingImages(
-        containerNo: containerNo,
-        gateStatus: _isOut ? 'out' : 'in',
-        date: dateStr,
-        uploadPath: uploadPath + containerNo,
-      );
+      // Prevent concurrent refreshes
+      if (_refreshingUploadedImages) return;
+      _refreshingUploadedImages = true;
 
-      if (mounted && files.isNotEmpty) {
-        _imageProvider.addUploadedImages(files);
-        setState(() {});
+      try {
+        // Probe server for last existing image index. If cached count matches, skip fetching.
+        final lastIndex = await _imageUploadService.getLastImageIndex(
+          containerNo: containerNo,
+          gateStatus: _isOut ? 'out' : 'in',
+          date: dateStr,
+          uploadPath: uploadPath + containerNo,
+        );
+
+        final cachedCount = _imageProvider.uploadedImages.length;
+        if (lastIndex > 0 && cachedCount == lastIndex) {
+          return;
+        }
+
+        final files = await _imageUploadService.fetchExistingImages(
+          containerNo: containerNo,
+          gateStatus: _isOut ? 'out' : 'in',
+          date: dateStr,
+          uploadPath: uploadPath + containerNo,
+        );
+
+        if (mounted && files.isNotEmpty) {
+          _imageProvider.addUploadedImages(files);
+          setState(() {});
+        }
+      } finally {
+        _refreshingUploadedImages = false;
       }
     } catch (_) {}
   }
@@ -364,20 +386,8 @@ class _ProcessScreenState extends State<ProcessScreen> {
         _updateCameraEnabled();
         // Fetch any existing server images for this container and show them in gallery
         try {
-          final now = DateTime.now();
-          final dateStr = "${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}-${now.year}";
-          final uploadPath = "container_pics/$dateStr/${_isOut ? 'out' : 'in'}/";
           _imageProvider.setCurrentContainer(_containerNoIn.text.trim());
-          final files = await _imageUploadService.fetchExistingImages(
-            containerNo: _containerNoIn.text.trim(),
-            gateStatus: _isOut ? 'out' : 'in',
-            date: dateStr,
-            uploadPath: uploadPath + _containerNoIn.text.trim(),
-          );
-          if (mounted && files.isNotEmpty) {
-            _imageProvider.addUploadedImages(files);
-            setState(() {});
-          }
+          await _refreshUploadedImages();
         } catch (_) {}
       }
     } catch (e) {
@@ -461,20 +471,8 @@ class _ProcessScreenState extends State<ProcessScreen> {
         _updateCameraEnabled();
         // Fetch any existing server images for this container and show them in gallery
         try {
-          final now = DateTime.now();
-          final dateStr = "${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}-${now.year}";
-          final uploadPath = "container_pics/$dateStr/out/";
           _imageProvider.setCurrentContainer(_containerNoOut.text.trim());
-          final files = await _imageUploadService.fetchExistingImages(
-            containerNo: _containerNoOut.text.trim(),
-            gateStatus: 'out',
-            date: dateStr,
-            uploadPath: uploadPath + _containerNoOut.text.trim(),
-          );
-          if (mounted && files.isNotEmpty) {
-            _imageProvider.addUploadedImages(files);
-            setState(() {});
-          }
+          await _refreshUploadedImages();
         } catch (_) {}
       }
     } catch (e) {
