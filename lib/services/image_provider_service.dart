@@ -52,14 +52,22 @@ class ImageProviderService extends ChangeNotifier {
   void addUploadedImage(File image) {
     if (_currentContainer == null) return;
     final list = _uploadedCache.putIfAbsent(_currentContainer!, () => []);
-    list.add(image);
+    // avoid duplicates by path
+    final exists = list.any((f) => f.path == image.path);
+    if (!exists) list.add(image);
     notifyListeners();
   }
 
   void addUploadedImages(List<File> images) {
     if (_currentContainer == null) return;
     final list = _uploadedCache.putIfAbsent(_currentContainer!, () => []);
-    list.addAll(images);
+    final existingPaths = list.map((f) => f.path).toSet();
+    for (final img in images) {
+      if (!existingPaths.contains(img.path)) {
+        list.add(img);
+        existingPaths.add(img.path);
+      }
+    }
     notifyListeners();
   }
 
