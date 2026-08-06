@@ -47,6 +47,8 @@ class ImageUploadService {
     String? uploadPath, // optional explicit upload path on server
     Function(double)? onProgress,
     int? startingIndex,
+    String? username,
+    int? userId,
   }) async {
     _uploading[containerNo] = true;
     _progress[containerNo] = 0.0;
@@ -59,6 +61,9 @@ class ImageUploadService {
       };
       if (date != null) map['date'] = date;
       if (uploadPath != null) map['upload_path'] = uploadPath;
+      // Include username/userId when available so server can attribute actions
+      if (username != null && username.trim().isNotEmpty) map['username'] = username.trim();
+      if (userId != null && userId > 0) map['user_id'] = userId;
 
       FormData formData = FormData.fromMap(map);
 
