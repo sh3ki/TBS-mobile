@@ -12,6 +12,8 @@ class ImageProviderService extends ChangeNotifier {
 
   // Cache images per container number (keyed by containerNo)
   final Map<String, List<File>> _cache = {};
+  // Cache uploaded images per container number
+  final Map<String, List<File>> _uploadedCache = {};
 
   // Current active container key
   String? _currentContainer;
@@ -29,6 +31,12 @@ class ImageProviderService extends ChangeNotifier {
     return _cache[_currentContainer!] ?? [];
   }
 
+  // Get uploaded images for current container
+  List<File> get uploadedImages {
+    if (_currentContainer == null) return [];
+    return _uploadedCache[_currentContainer!] ?? [];
+  }
+
   // Get images for a specific container
   List<File> imagesFor(String containerNo) {
     return _cache[containerNo.trim().toUpperCase()] ?? [];
@@ -39,6 +47,32 @@ class ImageProviderService extends ChangeNotifier {
     final list = _cache.putIfAbsent(_currentContainer!, () => []);
     list.add(image);
     notifyListeners();
+  }
+
+  void addUploadedImage(File image) {
+    if (_currentContainer == null) return;
+    final list = _uploadedCache.putIfAbsent(_currentContainer!, () => []);
+    list.add(image);
+    notifyListeners();
+  }
+
+  void addUploadedImages(List<File> images) {
+    if (_currentContainer == null) return;
+    final list = _uploadedCache.putIfAbsent(_currentContainer!, () => []);
+    list.addAll(images);
+    notifyListeners();
+  }
+
+  // Remove a specific file from the camera-taken images list (by reference)
+  void removeImageByFile(File file) {
+    if (_currentContainer == null) return;
+    final list = _cache[_currentContainer!];
+    if (list == null) return;
+    final idx = list.indexWhere((f) => f.path == file.path);
+    if (idx != -1) {
+      list.removeAt(idx);
+      notifyListeners();
+    }
   }
 
   void removeImage(int index) {
@@ -59,6 +93,18 @@ class ImageProviderService extends ChangeNotifier {
       _cache[_currentContainer!] = [];
     } else {
       _cache.clear();
+    }
+    notifyListeners();
+  }
+
+  // Clear uploaded images for current or specified container
+  void clearUploaded({String? containerNo}) {
+    if (containerNo != null) {
+      _uploadedCache.remove(containerNo.trim().toUpperCase());
+    } else if (_currentContainer != null) {
+      _uploadedCache[_currentContainer!] = [];
+    } else {
+      _uploadedCache.clear();
     }
     notifyListeners();
   }
