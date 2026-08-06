@@ -186,6 +186,34 @@ class _ProcessScreenState extends State<ProcessScreen> {
     });
     // Initialize camera enabled state (will be updated after loads)
     _updateCameraEnabled();
+    // Refresh uploaded images from server when opening the screen
+    WidgetsBinding.instance.addPostFrameCallback((_) => _refreshUploadedImages());
+  }
+
+  Future<void> _refreshUploadedImages() async {
+    try {
+      final containerNo = _isOut ? _containerNoOut.text.trim() : _containerNoIn.text.trim();
+      if (containerNo.isEmpty) return;
+
+      // Ensure provider is set to this container
+      _imageProvider.setCurrentContainer(containerNo);
+
+      final now = DateTime.now();
+      final dateStr = "${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}-${now.year}";
+      final uploadPath = "container_pics/$dateStr/${_isOut ? 'out' : 'in'}/";
+
+      final files = await _imageUploadService.fetchExistingImages(
+        containerNo: containerNo,
+        gateStatus: _isOut ? 'out' : 'in',
+        date: dateStr,
+        uploadPath: uploadPath + containerNo,
+      );
+
+      if (mounted && files.isNotEmpty) {
+        _imageProvider.addUploadedImages(files);
+        setState(() {});
+      }
+    } catch (_) {}
   }
 
   void _updateCameraEnabled() {
@@ -335,9 +363,7 @@ class _ProcessScreenState extends State<ProcessScreen> {
             uploadPath: uploadPath + _containerNoIn.text.trim(),
           );
           if (mounted && files.isNotEmpty) {
-            for (final f in files) {
-              _imageProvider.addImage(f);
-            }
+            _imageProvider.addUploadedImages(files);
             setState(() {});
           }
         } catch (_) {}
@@ -434,9 +460,7 @@ class _ProcessScreenState extends State<ProcessScreen> {
             uploadPath: uploadPath + _containerNoOut.text.trim(),
           );
           if (mounted && files.isNotEmpty) {
-            for (final f in files) {
-              _imageProvider.addImage(f);
-            }
+            _imageProvider.addUploadedImages(files);
             setState(() {});
           }
         } catch (_) {}
@@ -844,6 +868,9 @@ class _ProcessScreenState extends State<ProcessScreen> {
       final dateStr = "${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}-${now.year}";
       final uploadPath = "container_pics/$dateStr/${_isOut ? 'out' : 'in'}/$containerNo/";
 
+      // Prepare images snapshot to upload and to move on success
+      final imagesToUpload = List<File>.from(_imageProvider.images);
+
       // Determine last existing image index so filenames continue incrementally
       final lastIndex = await _imageUploadService.getLastImageIndex(
         containerNo: containerNo,
@@ -857,7 +884,7 @@ class _ProcessScreenState extends State<ProcessScreen> {
           .uploadContainerPictures(
         containerNo: containerNo,
         gateStatus: _isOut ? 'out' : 'in',
-        images: _imageProvider.images,
+        images: imagesToUpload,
         date: dateStr,
         uploadPath: uploadPath,
         startingIndex: lastIndex,
@@ -875,6 +902,19 @@ class _ProcessScreenState extends State<ProcessScreen> {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text(result['message'] ?? 'Upload finished')),
           );
+
+          // On successful upload, move the uploaded images from camera gallery
+          // into the Uploaded gallery so they appear in the "Uploaded" section.
+          try {
+            final success = result['success'] == true;
+            if (success) {
+              _imageProvider.addUploadedImages(imagesToUpload);
+              for (final f in imagesToUpload) {
+                _imageProvider.removeImageByFile(f);
+              }
+              if (mounted) setState(() {});
+            }
+          } catch (_) {}
         }
       }).catchError((e) {
         if (mounted) {
@@ -1044,6 +1084,45 @@ class _ProcessScreenState extends State<ProcessScreen> {
                     const SizedBox(height: 16),
                   ],
                 ),
+            ],
+          ),
+
+        // Image Gallery - 3 Columns
+        if (_imageProvider.uploadedImages.isNotEmpty)
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Uploaded',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 12),
+              SizedBox(
+                height: 100,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: _imageProvider.uploadedImages.length,
+                  separatorBuilder: (_, __) => const SizedBox(width: 8),
+                  itemBuilder: (context, index) {
+                    final file = _imageProvider.uploadedImages[index];
+                    return Container(
+                      width: 100,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.white, width: 2),
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: Image.file(file, fit: BoxFit.cover),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 16),
             ],
           ),
 
