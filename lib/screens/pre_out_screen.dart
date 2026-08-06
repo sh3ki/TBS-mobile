@@ -51,7 +51,7 @@ class _PreOutScreenState extends State<PreOutScreen> {
       return;
     }
     _initialized = true;
-    _load();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
   }
 
   Future<void> _load() async {
