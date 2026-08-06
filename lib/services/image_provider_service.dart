@@ -1,5 +1,7 @@
 import 'dart:io';
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
 
 class ImageProviderService extends ChangeNotifier {
   static final ImageProviderService _instance = ImageProviderService._internal();
@@ -23,6 +25,61 @@ class ImageProviderService extends ChangeNotifier {
     _currentContainer = containerNo.trim().toUpperCase();
     _cache.putIfAbsent(_currentContainer!, () => []);
     notifyListeners();
+    // Load any persisted uploaded images for this container in background
+    _loadCachedUploadedFor(_currentContainer!);
+  }
+
+  // Persisted cache file name
+  Future<File> get _cacheIndexFile async {
+    final dir = await getApplicationDocumentsDirectory();
+    return File('${dir.path}/image_cache_index.json');
+  }
+
+  // Load cached uploaded images for a container (background)
+  Future<void> _loadCachedUploadedFor(String containerNo) async {
+    try {
+      final f = await _cacheIndexFile;
+      if (!f.existsSync()) return;
+      final content = await f.readAsString();
+      if (content.trim().isEmpty) return;
+      final Map<String, dynamic> data = json.decode(content) as Map<String, dynamic>;
+      final entries = (data[containerNo] as List?)?.cast<String>() ?? [];
+      if (entries.isEmpty) return;
+
+      final List<File> files = [];
+      for (final p in entries) {
+        final file = File(p);
+        if (file.existsSync()) files.add(file);
+      }
+
+      if (files.isNotEmpty) {
+        final list = _uploadedCache.putIfAbsent(containerNo, () => []);
+        final existing = list.map((e) => e.path).toSet();
+        for (final file in files) {
+          if (!existing.contains(file.path)) {
+            list.add(file);
+            existing.add(file.path);
+          }
+        }
+        notifyListeners();
+      }
+    } catch (_) {
+      // ignore cache load errors
+    }
+  }
+
+  // Save current uploaded cache index to disk (async, fire-and-forget)
+  Future<void> _saveCacheIndex() async {
+    try {
+      final f = await _cacheIndexFile;
+      final Map<String, List<String>> out = {};
+      _uploadedCache.forEach((key, list) {
+        out[key] = list.map((e) => e.path).toList();
+      });
+      await f.writeAsString(json.encode(out));
+    } catch (_) {
+      // ignore save errors
+    }
   }
 
   // Get images for current container
@@ -56,6 +113,8 @@ class ImageProviderService extends ChangeNotifier {
     final exists = list.any((f) => f.path == image.path);
     if (!exists) list.add(image);
     notifyListeners();
+    // persist index
+    _saveCacheIndex();
   }
 
   void addUploadedImages(List<File> images) {
@@ -69,6 +128,8 @@ class ImageProviderService extends ChangeNotifier {
       }
     }
     notifyListeners();
+    // persist index
+    _saveCacheIndex();
   }
 
   // Remove a specific file from the camera-taken images list (by reference)
@@ -115,6 +176,7 @@ class ImageProviderService extends ChangeNotifier {
       _uploadedCache.clear();
     }
     notifyListeners();
+    _saveCacheIndex();
   }
 
   int get count => images.length;
