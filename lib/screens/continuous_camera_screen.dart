@@ -451,6 +451,7 @@ class _ContinuousCameraScreenState extends State<ContinuousCameraScreen> {
             ),
             _buildPreviewToggleHandle(),
             _buildPreviewPopup(height: previewPanelHeight),
+            // Centered capture button
             Positioned(
               bottom: 18,
               left: 0,
@@ -471,8 +472,7 @@ class _ContinuousCameraScreenState extends State<ContinuousCameraScreen> {
                       height: 86,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        color:
-                            _isTakingPhoto ? Colors.grey : Colors.red.shade400,
+                        color: _isTakingPhoto ? Colors.grey : Colors.red.shade400,
                       ),
                       child: _isTakingPhoto
                           ? const Center(
@@ -492,6 +492,31 @@ class _ContinuousCameraScreenState extends State<ContinuousCameraScreen> {
                               color: Colors.white,
                               size: 40,
                             ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+
+            // 'Done' button anchored to the right edge
+            Positioned(
+              bottom: 24,
+              right: 18,
+              child: GestureDetector(
+                onTap: _backToProcess,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.grey[800],
+                    borderRadius: BorderRadius.circular(30),
+                    border: Border.all(color: Colors.white, width: 2),
+                  ),
+                  child: const Text(
+                    'Done',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
                     ),
                   ),
                 ),
