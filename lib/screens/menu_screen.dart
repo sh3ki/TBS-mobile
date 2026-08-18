@@ -5,6 +5,7 @@ import '../providers/auth_provider.dart';
 import 'login_screen.dart';
 import 'pre_in_screen.dart';
 import 'pre_out_screen.dart';
+import 'inventory_screen.dart';
 
 class MenuScreen extends StatelessWidget {
   const MenuScreen({super.key});
@@ -129,6 +130,21 @@ class MenuScreen extends StatelessWidget {
                         Navigator.of(context).push(
                           MaterialPageRoute(
                             builder: (_) => const PreOutScreen(),
+                          ),
+                        );
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                    _buildMenuButton(
+                      context: context,
+                      icon: Icons.inventory_2,
+                      label: 'INVENTORY',
+                      subtitle: 'Search inventory',
+                      color: const Color(0xFF3E9AF4),
+                      onPressed: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => const InventoryScreen(),
                           ),
                         );
                       },
