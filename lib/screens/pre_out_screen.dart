@@ -17,6 +17,7 @@ class PreOutScreen extends StatefulWidget {
 
 class _PreOutScreenState extends State<PreOutScreen> {
   bool _initialized = false;
+  bool _isListView = false;
   late TextEditingController _searchController;
   String _searchQuery = '';
   Timer? _debounceTimer;
@@ -126,17 +127,37 @@ class _PreOutScreenState extends State<PreOutScreen> {
               ),
             ),
             const SizedBox(height: 16),
-            // Search field
-            TextField(
-              controller: _searchController,
-              decoration: InputDecoration(
-                hintText: 'Search by plate no.',
-                prefixIcon: const Icon(Icons.search),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
+            // Search field with view toggle
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _searchController,
+                    decoration: InputDecoration(
+                      hintText: 'Search by plate no.',
+                      prefixIcon: const Icon(Icons.search),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                    ),
+                  ),
                 ),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              ),
+                const SizedBox(width: 8),
+                Container(
+                  height: 48,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.grey[300]!),
+                  ),
+                  child: IconButton(
+                    onPressed: () => setState(() => _isListView = !_isListView),
+                    color: const Color(0xFFf44336),
+                    icon: Icon(_isListView ? Icons.list : Icons.grid_view),
+                    tooltip: _isListView ? 'List view' : 'Card view',
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 16),
             if (gate.isLoading)
@@ -235,117 +256,119 @@ class _PreOutScreenState extends State<PreOutScreen> {
                 ],
               ),
             ),
-            // Body
-            Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Hauler
-                  Row(
-                    children: [
-                      Icon(Icons.local_shipping, color: secondaryColor, size: 18),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Hauler',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Colors.grey[600],
-                                fontWeight: FontWeight.w500,
+            // Body and Footer (hidden when list view is active)
+            if (!_isListView) ...[
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Hauler
+                    Row(
+                      children: [
+                        Icon(Icons.local_shipping, color: secondaryColor, size: 18),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Hauler',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey[600],
+                                  fontWeight: FontWeight.w500,
+                                ),
                               ),
-                            ),
-                            Text(
-                              r.hauler.isEmpty ? 'N/A' : r.hauler,
-                              style: const TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.black87,
+                              Text(
+                                r.hauler.isEmpty ? 'N/A' : r.hauler,
+                                style: const TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.black87,
+                                ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  // Runtime
-                  Row(
-                    children: [
-                      Icon(Icons.schedule, color: secondaryColor, size: 18),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Runtime',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Colors.grey[600],
-                                fontWeight: FontWeight.w500,
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    // Runtime
+                    Row(
+                      children: [
+                        Icon(Icons.schedule, color: secondaryColor, size: 18),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Runtime',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey[600],
+                                  fontWeight: FontWeight.w500,
+                                ),
                               ),
-                            ),
-                            Text(
-                              '${r.runtime ?? 0} minutes',
-                              style: const TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.black87,
+                              Text(
+                                '${r.runtime ?? 0} minutes',
+                                style: const TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.bold,
+                                  color: Colors.black87,
+                                ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            // Footer with button
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.grey[50],
-                borderRadius: const BorderRadius.only(
-                  bottomLeft: Radius.circular(12),
-                  bottomRight: Radius.circular(12),
-                ),
-                border: Border(
-                  top: BorderSide(color: Colors.grey[200]!),
+                      ],
+                    ),
+                  ],
                 ),
               ),
-              child: SizedBox(
-                height: 40,
-                child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: primaryColor,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
+              // Footer with button
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.grey[50],
+                  borderRadius: const BorderRadius.only(
+                    bottomLeft: Radius.circular(12),
+                    bottomRight: Radius.circular(12),
+                  ),
+                  border: Border(
+                    top: BorderSide(color: Colors.grey[200]!),
+                  ),
+                ),
+                child: SizedBox(
+                  height: 40,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: primaryColor,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                    onPressed: () async {
+                      await Navigator.of(context).push(
+                        MaterialPageRoute(builder: (_) => ProcessScreen(record: r)),
+                      );
+                      if (!context.mounted) return;
+                      await _load();
+                    },
+                    child: const Text(
+                      'PROCESS OUT',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 18,
+                      ),
                     ),
                   ),
-                  onPressed: () async {
-                    await Navigator.of(context).push(
-                      MaterialPageRoute(builder: (_) => ProcessScreen(record: r)),
-                    );
-                    if (!context.mounted) return;
-                    await _load();
-                  },
-                  child: const Text(
-                    'PROCESS OUT',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 18,
-                    ),
-                  ),
                 ),
               ),
-            ),
+            ],
           ],
         ),
       ),
