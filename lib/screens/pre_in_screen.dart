@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../providers/gate_provider.dart';
 import '../utils/error_handler.dart';
+import '../utils/duration_formatter.dart';
 import 'process_screen.dart';
 
 class PreInScreen extends StatefulWidget {
@@ -98,37 +99,38 @@ class _PreInScreenState extends State<PreInScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Container(
+                  width: double.infinity,
                   padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF4CAF50).withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: const Color(0xFF4CAF50),
-                      width: 2,
-                    ),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Pending Pre-IN Records',
-                        style: const TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                          color: Color(0xFF31393C),
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Containers awaiting gate-in processing',
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: Colors.grey[600],
-                        ),
-                      ),
-                    ],
+                decoration: BoxDecoration(
+                  color: const Color(0xFF4CAF50).withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: const Color(0xFF4CAF50),
+                    width: 2,
                   ),
                 ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Pending Pre-IN Records',
+                      style: const TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        color: Color(0xFF31393C),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Containers awaiting gate-in processing',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Colors.grey[600],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
                 const SizedBox(height: 16),
                 // Search field with view toggle
                 Row(
@@ -174,10 +176,12 @@ class _PreInScreenState extends State<PreInScreen> {
                 children: [
                   const SizedBox(height: 8),
                   if (gate.isLoading)
-                    const Center(
+                    Center(
                       child: Padding(
-                        padding: EdgeInsets.symmetric(vertical: 32),
-                        child: CircularProgressIndicator(),
+                        padding: const EdgeInsets.symmetric(vertical: 32),
+                        child: CircularProgressIndicator(
+                          color: const Color(0xFF4CAF50),
+                        ),
                       ),
                     )
                   else if (filteredRecords.isEmpty)
@@ -328,7 +332,7 @@ class _PreInScreenState extends State<PreInScreen> {
                                 ),
                               ),
                               Text(
-                                '${r.runtime ?? 0} minutes',
+                                formatRuntimeMinutes(r.runtime),
                                 style: const TextStyle(
                                   fontSize: 14,
                                   fontWeight: FontWeight.bold,
