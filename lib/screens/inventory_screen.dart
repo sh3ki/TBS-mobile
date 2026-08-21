@@ -101,6 +101,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Container(
+                  width: double.infinity,
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
                     color: const Color(0xFF3E9AF4).withOpacity(0.08),
@@ -130,9 +131,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         ),
                       ),
                     ],
-                  ),
                 ),
+              ),
                 const SizedBox(height: 16),
+                // Search field with view toggle
                 Row(
                   children: [
                     Expanded(
@@ -176,10 +178,12 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 children: [
                   const SizedBox(height: 8),
                   if (_loading)
-                    const Center(
+                    Center(
                       child: Padding(
-                        padding: EdgeInsets.symmetric(vertical: 32),
-                        child: CircularProgressIndicator(),
+                        padding: const EdgeInsets.symmetric(vertical: 32),
+                        child: CircularProgressIndicator(
+                          color: const Color(0xFF3E9AF4),
+                        ),
                       ),
                     )
                   else if (_records.isEmpty)
@@ -233,6 +237,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
     final approval = (r['approval_notes'] ?? r['approval'] ?? r['app_notes'] ?? '').toString();
     final gateRemarks = (r['remarks'] ?? r['gate_remarks'] ?? r['eir_notes'] ?? '').toString();
     final remarks = (r['remarks'] ?? r['eir_notes'] ?? '').toString();
+    final holdNotes = (r['hold_notes'] ?? r['hold_note'] ?? r['hold'] ?? r['hold_notes_text'] ?? r['hold_reason'] ?? r['hold_notes_display'] ?? '').toString();
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -297,6 +302,11 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 _infoRow(Icons.check_circle_outline, 'Approval remarks', approval),
                 const SizedBox(height: 8),
                 _infoRow(Icons.note, 'Remarks', remarks),
+                const SizedBox(height: 8),
+                if (holdNotes.isNotEmpty) ...[
+                  _infoRow(Icons.lock, 'Hold notes', holdNotes),
+                  const SizedBox(height: 8),
+                ],
               ],
             ),
           ),
@@ -308,6 +318,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
   Widget _buildInventoryListRow(Map<String, dynamic> r) {
     final containerNo = (r['container_no'] ?? r['containerNo'] ?? '').toString();
     final status = (r['container_status'] ?? r['status'] ?? '').toString();
+    final holdNotes = (r['hold_notes'] ?? r['hold_note'] ?? r['hold'] ?? r['hold_notes_text'] ?? r['hold_reason'] ?? r['hold_notes_display'] ?? '').toString();
     const Color primaryColor = Color(0xFF3E9AF4);
 
     return Container(
@@ -353,6 +364,27 @@ class _InventoryScreenState extends State<InventoryScreen> {
                   ),
                 ),
                 const SizedBox(width: 8),
+                if (holdNotes.isNotEmpty) ...[
+                  IconButton(
+                    onPressed: () {
+                      showDialog(
+                        context: context,
+                        builder: (_) => AlertDialog(
+                          title: const Text('Hold notes'),
+                          content: Text(holdNotes),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.of(context).pop(),
+                              child: const Text('Close'),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.lock, color: Colors.white, size: 18),
+                    tooltip: 'Hold notes',
+                  ),
+                ],
                 Text(
                   status.isEmpty ? '-' : status,
                   style: const TextStyle(
