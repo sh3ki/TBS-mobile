@@ -1550,6 +1550,10 @@ class _ProcessScreenState extends State<ProcessScreen> {
                 DropdownMenuItem<T>(value: e.id as T, child: Text(e.label)))
             .toList(),
         onChanged: enabled ? onChanged : null,
+        style: TextStyle(
+          color: enabled ? Colors.black87 : Colors.black,
+          fontWeight: enabled ? FontWeight.normal : FontWeight.w600,
+        ),
         decoration: InputDecoration(
           labelText: label,
           hintText: hintText,
@@ -1563,8 +1567,10 @@ class _ProcessScreenState extends State<ProcessScreen> {
           ),
           disabledBorder: OutlineInputBorder(
             borderRadius: BorderRadius.circular(8),
-            borderSide: BorderSide(color: Colors.grey[200]!),
+            borderSide: BorderSide(color: Colors.grey[400]!, width: 1.5),
           ),
+          filled: true,
+          fillColor: enabled ? Colors.white : Colors.grey[50],
         ),
       ),
     );
@@ -1773,7 +1779,7 @@ class _ProcessScreenState extends State<ProcessScreen> {
                       _statusOptions,
                       (value) => setState(() => _selectedStatusOut = value),
                       hintText: 'Select Container Status',
-                      enabled: true,
+                      enabled: false,
                     ),
                     const SizedBox(height: 16),
 
