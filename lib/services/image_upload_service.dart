@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:async';
+import 'dart:math';
 import 'package:dio/dio.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
@@ -53,88 +54,98 @@ class ImageUploadService {
     _uploading[containerNo] = true;
     _progress[containerNo] = 0.0;
     _uploadController.add(UploadStatus(containerNo: containerNo, progress: 0.0, completed: false, success: false));
+
+    // Server-side PHP often limits number of uploaded files per request (default: 20).
+    // Upload in batches to avoid server-side max_file_uploads limits and to provide
+    // an aggregated progress indicator across all batches.
+    final int totalImages = images.length;
+    if (totalImages == 0) {
+      _uploading[containerNo] = false;
+      _progress[containerNo] = 1.0;
+      _uploadController.add(UploadStatus(containerNo: containerNo, progress: 1.0, completed: true, success: true, message: 'No images to upload'));
+      return {'success': true, 'message': 'No images to upload', 'data': null};
+    }
+
+    final int batchSize = 20; // safe default; can be made configurable
+    int uploadedCount = 0;
+
     try {
-      // Prepare multipart form data
-      final Map<String, dynamic> map = {
-        'container_no': containerNo,
-        'gate_status': gateStatus,
-      };
-      if (date != null) map['date'] = date;
-      if (uploadPath != null) map['upload_path'] = uploadPath;
-      // Include username/userId when available so server can attribute actions
-      if (username != null && username.trim().isNotEmpty) map['username'] = username.trim();
-      if (userId != null && userId > 0) map['user_id'] = userId;
+      for (int start = 0; start < totalImages; start += batchSize) {
+        final end = min(start + batchSize, totalImages);
+        final batch = images.sublist(start, end);
 
-      FormData formData = FormData.fromMap(map);
+        // Prepare multipart for this batch
+        final Map<String, dynamic> map = {
+          'container_no': containerNo,
+          'gate_status': gateStatus,
+        };
+        if (date != null) map['date'] = date;
+        if (uploadPath != null) map['upload_path'] = uploadPath;
+        if (username != null && username.trim().isNotEmpty) map['username'] = username.trim();
+        if (userId != null && userId > 0) map['user_id'] = userId;
 
-      // Add each image
-      for (int i = 0; i < images.length; i++) {
-        final file = images[i];
-        if (await file.exists()) {
-          // Use 'pictures[]' so PHP/Laravel treats multiple files as an array
-          formData.files.add(
-            MapEntry(
-              'pictures[]',
-              await MultipartFile.fromFile(
-                file.path,
-                filename: '$containerNo(${(startingIndex ?? 0) + i + 1}).jpg',
+        FormData formData = FormData.fromMap(map);
+
+        for (int j = 0; j < batch.length; j++) {
+          final file = batch[j];
+          if (await file.exists()) {
+            final overallIndex = (startingIndex ?? 0) + start + j + 1;
+            formData.files.add(
+              MapEntry(
+                'pictures[]',
+                await MultipartFile.fromFile(
+                  file.path,
+                  filename: '$containerNo($overallIndex).jpg',
+                ),
               ),
-            ),
-          );
+            );
+          }
+        }
+
+        // Upload this batch and report aggregated progress
+        final response = await _dio
+            .post(
+              '${AppConfig.baseUrl}/mobile/gateinout/upload-pictures',
+              data: formData,
+              onSendProgress: (sent, total) {
+                double batchProgress = 0.0;
+                if (total > 0) batchProgress = sent / total;
+                // Weight batch progress by number of files in the batch relative to total images
+                final overallProgress = ((uploadedCount) + batchProgress * batch.length) / totalImages;
+                onProgress?.call(overallProgress);
+                _progress[containerNo] = overallProgress.clamp(0.0, 1.0);
+                _uploadController.add(UploadStatus(containerNo: containerNo, progress: _progress[containerNo] ?? 0.0, completed: false, success: false));
+              },
+            )
+            .timeout(const Duration(seconds: 300));
+
+        if (response.statusCode == 200) {
+          uploadedCount += batch.length;
+          // continue to next batch
+        } else {
+          _uploading[containerNo] = false;
+          final progressVal = (uploadedCount / totalImages).clamp(0.0, 1.0);
+          _progress[containerNo] = progressVal;
+          _uploadController.add(UploadStatus(containerNo: containerNo, progress: progressVal, completed: true, success: false, message: 'Upload failed with status ${response.statusCode}'));
+          return {'success': false, 'message': 'Upload failed with status ${response.statusCode}', 'data': null};
         }
       }
 
-      // Upload with timeout and progress tracking
-      final response = await _dio
-          .post(
-            '${AppConfig.baseUrl}/mobile/gateinout/upload-pictures',
-            data: formData,
-            onSendProgress: (sent, total) {
-              if (total > 0) {
-                onProgress?.call(sent / total);
-                _progress[containerNo] = sent / total;
-                _uploadController.add(UploadStatus(containerNo: containerNo, progress: _progress[containerNo] ?? 0.0, completed: false, success: false));
-              }
-            },
-          )
-          .timeout(const Duration(seconds: 300)); // 5 minutes timeout
-
-      if (response.statusCode == 200) {
-          _uploading[containerNo] = false;
-          _progress[containerNo] = 1.0;
-          _uploadController.add(UploadStatus(containerNo: containerNo, progress: 1.0, completed: true, success: true, message: 'Images uploaded successfully'));
-        return {
-          'success': true,
-          'message': 'Images uploaded successfully',
-          'data': response.data,
-        };
-      } else {
-        _uploading[containerNo] = false;
-        _uploadController.add(UploadStatus(containerNo: containerNo, progress: _progress[containerNo] ?? 0.0, completed: true, success: false, message: 'Upload failed with status ${response.statusCode}'));
-        return {
-          'success': false,
-          'message': 'Upload failed with status ${response.statusCode}',
-          'data': null,
-        };
-      }
+      // All batches completed
+      _uploading[containerNo] = false;
+      _progress[containerNo] = 1.0;
+      _uploadController.add(UploadStatus(containerNo: containerNo, progress: 1.0, completed: true, success: true, message: 'Images uploaded successfully'));
+      return {'success': true, 'message': 'Images uploaded successfully', 'data': null};
     } on DioException catch (e) {
       _uploading[containerNo] = false;
       final msg = _extractDioErrorMessage(e);
       _uploadController.add(UploadStatus(containerNo: containerNo, progress: _progress[containerNo] ?? 0.0, completed: true, success: false, message: msg));
-      return {
-        'success': false,
-        'message': msg,
-        'data': null,
-      };
+      return {'success': false, 'message': msg, 'data': null};
     } catch (e) {
       _uploading[containerNo] = false;
       final msg = 'Error uploading images: $e';
       _uploadController.add(UploadStatus(containerNo: containerNo, progress: _progress[containerNo] ?? 0.0, completed: true, success: false, message: msg));
-      return {
-        'success': false,
-        'message': msg,
-        'data': null,
-      };
+      return {'success': false, 'message': msg, 'data': null};
     }
   }
 
