@@ -11,6 +11,7 @@ import '../providers/auth_provider.dart';
 import '../services/gate_service.dart';
 import '../services/image_upload_service.dart';
 import '../services/image_provider_service.dart';
+import '../services/form_cache_service.dart';
 import '../screens/continuous_camera_screen.dart';
 import '../utils/error_handler.dart';
 
@@ -55,6 +56,7 @@ class _ProcessScreenState extends State<ProcessScreen> {
   final GateService _gateService = GateService();
   final ImageUploadService _imageUploadService = ImageUploadService();
   final _imageProvider = ImageProviderService();
+  final _formCache = FormCacheService();
   final ScrollController _formScrollController = ScrollController();
   final ScrollController _galleryScrollController = ScrollController();
 
@@ -93,6 +95,8 @@ class _ProcessScreenState extends State<ProcessScreen> {
   bool _isoFetched = false;
   bool _containerFetched = false;
   bool _refreshingUploadedImages = false;
+  // Flag to prevent saving cache while applying cached values
+  bool _applyingCache = false;
   List<ContainerSearchResult> _containerSearchResults = [];
   int? _selectedContainerId;
 
@@ -158,6 +162,21 @@ class _ProcessScreenState extends State<ProcessScreen> {
     final initialCno = _isOut ? _containerNoOut.text.trim() : _containerNoIn.text.trim();
     if (initialCno.isNotEmpty) {
       _imageProvider.setCurrentContainer(initialCno);
+      // set form cache current key for IN (container no)
+      if (!_isOut) {
+        _formCache.setCurrent(initialCno, gate: 'IN');
+        _applyCachedForm(initialCno, gate: 'IN');
+      } else {
+        // For OUT, prefer plate no as cache key if available
+        final plate = _plateNoOut.trim();
+        if (plate.isNotEmpty) {
+          _formCache.setCurrent(plate, gate: 'OUT');
+          _applyCachedForm(plate, gate: 'OUT');
+        } else {
+          _formCache.setCurrent(initialCno, gate: 'OUT');
+          _applyCachedForm(initialCno, gate: 'OUT');
+        }
+      }
       // Trigger guarded refresh to load cached uploaded images immediately
       WidgetsBinding.instance.addPostFrameCallback((_) => _refreshUploadedImages());
 
@@ -197,6 +216,11 @@ class _ProcessScreenState extends State<ProcessScreen> {
           _searchDebounce?.cancel();
           _searchDebounce = Timer(const Duration(milliseconds: 600), () {
             _refreshUploadedImages();
+            // Save cache for current container before switching to new one
+            _saveCache();
+            // Set cache key and load/apply cached values for new container
+            _formCache.setCurrent(cno, gate: 'IN');
+            _applyCachedForm(cno, gate: 'IN');
           });
         }
       }
@@ -213,6 +237,16 @@ class _ProcessScreenState extends State<ProcessScreen> {
           _searchDebounce?.cancel();
           _searchDebounce = Timer(const Duration(milliseconds: 600), () {
             _refreshUploadedImages();
+            // For OUT, prefer plate no as cache key if available
+            final plate = _plateNoOut.trim();
+            if (plate.isNotEmpty) {
+              _formCache.setCurrent(plate, gate: 'OUT');
+              _applyCachedForm(plate, gate: 'OUT');
+            } else {
+              _formCache.setCurrent(cno, gate: 'OUT');
+              _applyCachedForm(cno, gate: 'OUT');
+            }
+            _saveCache();
           });
         }
       }
@@ -224,12 +258,152 @@ class _ProcessScreenState extends State<ProcessScreen> {
         _updateCameraEnabled();
         // Refresh uploaded images for this fetched container
         WidgetsBinding.instance.addPostFrameCallback((_) => _refreshUploadedImages());
+        _saveCache();
       }
+    });
+    // listen for Gate IN field changes to persist cache on every character
+    _isoCodeIn.addListener(() {
+      if (mounted && !_applyingCache) _saveCache();
+    });
+    _remarksIn.addListener(() {
+      if (mounted && !_applyingCache) _saveCache();
+    });
+    _dateManufactured.addListener(() {
+      if (mounted && !_applyingCache) _saveCache();
+    });
+    // listen for Gate OUT field changes to persist cache
+    _remarksOut.addListener(() {
+      if (mounted && !_applyingCache) _saveCache();
+    });
+    _isoCodeOut.addListener(() {
+      if (mounted && !_applyingCache) _saveCache();
     });
     // Initialize camera enabled state (will be updated after loads)
     _updateCameraEnabled();
-    // Refresh uploaded images from server when opening the screen
-    WidgetsBinding.instance.addPostFrameCallback((_) => _refreshUploadedImages());
+    // Refresh uploaded images and load persisted form cache when opening the screen
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await _refreshUploadedImages();
+      await _formCache.loadAll();
+
+      // After cache is loaded, apply cached values for current key if present
+      try {
+        if (!_isOut) {
+          final key = _containerNoIn.text.trim();
+          if (key.isNotEmpty) {
+            _formCache.setCurrent(key, gate: 'IN');
+            _applyCachedForm(key, gate: 'IN');
+          }
+        } else {
+          final plateKey = _plateNoOut.trim().isNotEmpty ? _plateNoOut.trim() : _containerNoOut.text.trim();
+          if (plateKey.isNotEmpty) {
+            _formCache.setCurrent(plateKey, gate: 'OUT');
+            _applyCachedForm(plateKey, gate: 'OUT');
+          }
+        }
+      } catch (_) {}
+    });
+  }
+
+  void _clearGateInFields() {
+    _dateManufactured.text = '';
+    _isoCodeIn.text = '';
+    _remarksIn.text = '';
+  }
+
+  void _applyCachedForm(String key, {required String gate}) {
+    try {
+      try { print('ProcessScreen: applying cache for key=$key gate=$gate'); } catch (_) {}
+      _applyingCache = true; // Prevent cache save during apply
+      final cache = _formCache.getCached(key, gate: gate);
+
+      if (gate.toUpperCase() == 'IN') {
+        // If no cache for this container, clear the form fields
+        if (cache == null) {
+          _clearGateInFields();
+          if (mounted) setState(() {});
+          try { print('ProcessScreen: no cache found for IN $key - cleared fields'); } catch (_) {}
+          _applyingCache = false;
+          return;
+        }
+        try { print('ProcessScreen: found cache for IN $key keys=${cache.keys.toList()}'); } catch (_) {}
+        // Apply cached values
+        if (cache.containsKey('date_manufactured')) {
+          _dateManufactured.text = cache['date_manufactured'] ?? '';
+        } else {
+          _dateManufactured.text = '';
+        }
+        _isoCodeIn.text = cache.containsKey('iso_code') ? (cache['iso_code'] ?? '') : '';
+        _remarksIn.text = cache.containsKey('remarks') ? (cache['remarks'] ?? '') : '';
+        if (cache.containsKey('size_type')) _selectedSizeTypeIn = cache['size_type'] as int?;
+        if (cache.containsKey('class')) _selectedClassIn = cache['class'] as int?;
+        if (cache.containsKey('status')) _selectedStatusIn = cache['status'] as int?;
+        if (cache.containsKey('checker_name')) _checkerNameIn = cache['checker_name'] ?? '';
+      } else {
+        if (cache != null) {
+          try { print('ProcessScreen: OUT cache keys=${cache.keys.toList()}'); } catch (_) {}
+          try { print('ProcessScreen: OUT cache iso="${cache['iso_code']}" remarks="${cache['remarks']}"'); } catch (_) {}
+          if (cache.containsKey('container_no')) _containerNoOut.text = cache['container_no'] ?? '';
+          if (cache.containsKey('iso_code')) _isoCodeOut.text = cache['iso_code'] ?? '';
+          if (cache.containsKey('remarks')) _remarksOut.text = cache['remarks'] ?? '';
+          if (cache.containsKey('size_type')) _selectedSizeTypeOut = cache['size_type'] as int?;
+          if (cache.containsKey('class')) _selectedClassOut = cache['class'] as int?;
+          if (cache.containsKey('status')) _selectedStatusOut = cache['status'] as int?;
+          if (cache.containsKey('client_id')) _clientIdOut = cache['client_id'] as int?;
+          if (cache.containsKey('client_name')) _clientNameOut = cache['client_name'] ?? '';
+          if (cache.containsKey('plate_no')) _plateNoOut = cache['plate_no'] ?? _plateNoOut;
+          if (cache.containsKey('hauler')) _haulerOut = cache['hauler'] ?? _haulerOut;
+        }
+      }
+      if (mounted) setState(() {});
+      // Ensure image provider uses the applied container key and refresh uploaded images
+      try {
+        if (gate.toUpperCase() == 'IN') {
+          final cno = _containerNoIn.text.trim();
+          if (cno.isNotEmpty) {
+            _imageProvider.setCurrentContainer(cno);
+            WidgetsBinding.instance.addPostFrameCallback((_) => _refreshUploadedImages());
+          }
+        } else {
+          final cno = _containerNoOut.text.trim();
+          if (cno.isNotEmpty) {
+            _imageProvider.setCurrentContainer(cno);
+            WidgetsBinding.instance.addPostFrameCallback((_) => _refreshUploadedImages());
+          }
+        }
+      } catch (_) {}
+      _applyingCache = false;
+    } catch (_) {}
+  }
+
+  void _saveCache() {
+    try {
+      final key = !_isOut ? _containerNoIn.text.trim() : (_plateNoOut.trim().isNotEmpty ? _plateNoOut.trim() : _containerNoOut.text.trim());
+      if (key.isEmpty) return;
+      final Map<String, dynamic> data = {};
+      if (!_isOut) {
+        data['date_manufactured'] = _dateManufactured.text.trim();
+        data['iso_code'] = _isoCodeIn.text.trim();
+        data['remarks'] = _remarksIn.text.trim();
+        data['size_type'] = _selectedSizeTypeIn;
+        data['class'] = _selectedClassIn;
+        data['status'] = _selectedStatusIn;
+        data['checker_name'] = _checkerNameIn;
+      } else {
+        data['iso_code'] = _isoCodeOut.text.trim();
+        data['container_no'] = _containerNoOut.text.trim();
+        data['remarks'] = _remarksOut.text.trim();
+        data['size_type'] = _selectedSizeTypeOut;
+        data['class'] = _selectedClassOut;
+        data['status'] = _selectedStatusOut;
+        data['client_id'] = _clientIdOut;
+        data['client_name'] = _clientNameOut;
+        data['plate_no'] = _plateNoOut;
+        data['hauler'] = _haulerOut;
+      }
+      _formCache.setCurrent(key, gate: _isOut ? 'OUT' : 'IN');
+      try { print('ProcessScreen: saving cache for key=$key gate=${_isOut ? 'OUT' : 'IN'} data_keys=${data.keys.toList()} iso="${data['iso_code']}" remarks="${data['remarks']}"'); } catch (_) {}
+      _formCache.saveForCurrent(data);
+    } catch (_) {}
   }
 
   Future<void> _refreshUploadedImages() async {
@@ -288,10 +462,9 @@ class _ProcessScreenState extends State<ProcessScreen> {
   }
 
   void _updateCameraEnabled() {
-    final fetchedEnabled = _isOut ? _containerFetched : (_isoFetched || _containerFetched);
-    final enabled = _allowCamera || (fetchedEnabled && !_userEdited);
+    // Always enable camera on process screen per new requirement
     if (mounted) {
-      setState(() => _cameraEnabled = enabled);
+      setState(() => _cameraEnabled = true);
     }
   }
 
@@ -425,6 +598,9 @@ class _ProcessScreenState extends State<ProcessScreen> {
         try {
           _imageProvider.setCurrentContainer(_containerNoIn.text.trim());
           await _refreshUploadedImages();
+          // Apply any cached form values for this container
+          _formCache.setCurrent(_containerNoIn.text.trim(), gate: 'IN');
+          _applyCachedForm(_containerNoIn.text.trim(), gate: 'IN');
         } catch (_) {}
       }
     } catch (e) {
@@ -510,6 +686,10 @@ class _ProcessScreenState extends State<ProcessScreen> {
         try {
           _imageProvider.setCurrentContainer(_containerNoOut.text.trim());
           await _refreshUploadedImages();
+          // Apply any cached form values for this container/plate
+          final plateKey = _plateNoOut.trim().isNotEmpty ? _plateNoOut.trim() : _containerNoOut.text.trim();
+          _formCache.setCurrent(plateKey, gate: 'OUT');
+          _applyCachedForm(plateKey, gate: 'OUT');
         } catch (_) {}
       }
     } catch (e) {
@@ -628,6 +808,7 @@ class _ProcessScreenState extends State<ProcessScreen> {
       _dateManufactured.selection = TextSelection.fromPosition(
         TextPosition(offset: formatted.length),
       );
+      _saveCache();
     }
   }
 
@@ -810,6 +991,10 @@ class _ProcessScreenState extends State<ProcessScreen> {
     _lastFetchFromSelection = true;
     // Fetch additional container details from inventory
     _fetchContainerDetailsForGateOut(container.containerNo);
+    // Set cache key (prefer plate no for OUT) and persist current state
+    final key = container.plateNo.isNotEmpty ? container.plateNo : container.containerNo;
+    _formCache.setCurrent(key, gate: 'OUT');
+    _saveCache();
   }
 
   Future<void> _fetchContainerDetailsForGateOut(String containerNo) async {
@@ -884,10 +1069,8 @@ class _ProcessScreenState extends State<ProcessScreen> {
   }
 
   Future<void> _uploadImages() async {
+    // If there are no images, do nothing (images are optional)
     if (_imageProvider.images.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('No images to upload')),
-      );
       return;
     }
 
@@ -1029,7 +1212,23 @@ class _ProcessScreenState extends State<ProcessScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Submit Button
+        // Camera Button
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton.icon(
+            icon: const Icon(Icons.camera_alt),
+            label: const Text('Open Camera'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.blue,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              foregroundColor: Colors.white,
+            ),
+            onPressed: _cameraEnabled ? _openCameraScreen : null,
+          ),
+        ),
+        const SizedBox(height: 16),
+
+        // Submit Button (placed directly under Open Camera)
         SizedBox(
           width: double.infinity,
           child: ElevatedButton.icon(
@@ -1053,22 +1252,6 @@ class _ProcessScreenState extends State<ProcessScreen> {
           ),
         ),
         const SizedBox(height: 12),
-
-        // Camera Button
-        SizedBox(
-          width: double.infinity,
-          child: ElevatedButton.icon(
-            icon: const Icon(Icons.camera_alt),
-            label: const Text('Open Camera'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.blue,
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              foregroundColor: Colors.white,
-            ),
-            onPressed: _cameraEnabled ? _openCameraScreen : null,
-          ),
-        ),
-        const SizedBox(height: 16),
 
         // Image Count
         if (_imageProvider.images.isNotEmpty)
@@ -1101,52 +1284,20 @@ class _ProcessScreenState extends State<ProcessScreen> {
             ),
           ),
 
-        // Upload Button
-        if (_imageProvider.images.isNotEmpty)
+        // Upload Progress (shown when background upload is active)
+        if (_showUploadProgress)
           Column(
             children: [
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  icon: _uploadingImages
-                      ? const SizedBox(
-                          height: 20,
-                          width: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            valueColor:
-                                AlwaysStoppedAnimation<Color>(Colors.white),
-                          ),
-                        )
-                      : const Icon(Icons.cloud_upload),
-                  label: Text(
-                      _uploadingImages ? 'Uploading...' : 'Upload Pictures'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    foregroundColor: Colors.white,
-                  ),
-                  onPressed: _uploadingImages ? null : _uploadImages,
+              LinearProgressIndicator(value: _uploadProgress),
+              const SizedBox(height: 8),
+              Text(
+                '${(_uploadProgress * 100).toStringAsFixed(0)}%',
+                style: const TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
                 ),
               ),
               const SizedBox(height: 16),
-
-              // Upload Progress
-              if (_showUploadProgress)
-                Column(
-                  children: [
-                    LinearProgressIndicator(value: _uploadProgress),
-                    const SizedBox(height: 8),
-                    Text(
-                      '${(_uploadProgress * 100).toStringAsFixed(0)}%',
-                      style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                  ],
-                ),
             ],
           ),
 
@@ -1481,6 +1632,8 @@ class _ProcessScreenState extends State<ProcessScreen> {
           _userEdited = false;
         });
         _updateCameraEnabled();
+          // Start uploading any taken images after successful submit (images optional)
+          _uploadImages();
         // After successful submit, refresh uploaded images for the (possibly new) container
         WidgetsBinding.instance.addPostFrameCallback((_) => _refreshUploadedImages());
       }
@@ -1500,11 +1653,12 @@ class _ProcessScreenState extends State<ProcessScreen> {
   }
 
   Widget _buildTextField(String label, TextEditingController controller,
-      {bool enabled = true, int maxLines = 1, String? hint}) {
+      {bool enabled = true, int maxLines = 1, String? hint, ValueChanged<String>? onChanged}) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: TextField(
         controller: controller,
+        onChanged: onChanged,
         enabled: enabled,
         maxLines: maxLines,
         style: TextStyle(
@@ -1777,7 +1931,10 @@ class _ProcessScreenState extends State<ProcessScreen> {
                       '',
                       _selectedStatusOut,
                       _statusOptions,
-                      (value) => setState(() => _selectedStatusOut = value),
+                      (value) {
+                        setState(() => _selectedStatusOut = value);
+                        _saveCache();
+                      },
                       hintText: 'Select Container Status',
                       enabled: false,
                     ),
@@ -1889,7 +2046,10 @@ class _ProcessScreenState extends State<ProcessScreen> {
                       '',
                       _selectedSizeTypeIn,
                       _sizeTypeOptions,
-                      (value) => setState(() => _selectedSizeTypeIn = value),
+                      (value) {
+                        setState(() => _selectedSizeTypeIn = value);
+                        _saveCache();
+                      },
                       hintText: 'Select Size/Type',
                     ),
                     const SizedBox(height: 16),
@@ -1904,7 +2064,7 @@ class _ProcessScreenState extends State<ProcessScreen> {
                       ),
                     ),
                     const SizedBox(height: 4),
-                    _buildTextField('', _isoCodeIn),
+                    _buildTextField('', _isoCodeIn, onChanged: (v) => !_applyingCache ? _saveCache() : null),
                     const SizedBox(height: 16),
 
                     // Manufactured Date
@@ -1955,7 +2115,10 @@ class _ProcessScreenState extends State<ProcessScreen> {
                       '',
                       _selectedClassIn,
                       _classOptions,
-                      (value) => setState(() => _selectedClassIn = value),
+                      (value) {
+                        setState(() => _selectedClassIn = value);
+                        _saveCache();
+                      },
                       hintText: 'Select Class',
                     ),
 
@@ -1973,7 +2136,10 @@ class _ProcessScreenState extends State<ProcessScreen> {
                       '',
                       _selectedStatusIn,
                       _statusOptions,
-                      (value) => setState(() => _selectedStatusIn = value),
+                      (value) {
+                        setState(() => _selectedStatusIn = value);
+                        _saveCache();
+                      },
                       hintText: 'Select Container Status',
                     ),
                     const SizedBox(height: 16),
@@ -1988,7 +2154,7 @@ class _ProcessScreenState extends State<ProcessScreen> {
                       ),
                     ),
                     const SizedBox(height: 4),
-                    _buildTextField('', _remarksIn, maxLines: 4),
+                    _buildTextField('', _remarksIn, maxLines: 4, onChanged: (v) => !_applyingCache ? _saveCache() : null),
                   ],
 
                   const SizedBox(height: 24),
