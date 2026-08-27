@@ -100,6 +100,9 @@ class _ProcessScreenState extends State<ProcessScreen> {
   List<ContainerSearchResult> _containerSearchResults = [];
   int? _selectedContainerId;
 
+  // Store pending status value if options aren't loaded yet
+  String _pendingStatusOutValue = '';
+
   List<LookupItem> _statusOptions = const [];
   List<LookupItem> _sizeTypeOptions = const [];
   List<LookupItem> _classOptions = const [];
@@ -127,6 +130,8 @@ class _ProcessScreenState extends State<ProcessScreen> {
   // Gate OUT - Plate number and Hauler
   String _plateNoOut = '';
   String _haulerOut = '';
+  // Stable cache key for Gate OUT (opened pre-out plate)
+  String _outCacheKey = '';
 
   // Gate OUT - Additional details from inventory
   String _approvalNotesOut = '';
@@ -145,6 +150,7 @@ class _ProcessScreenState extends State<ProcessScreen> {
         _containerNoOut.text = containerNoFromRecord;
       }
       _plateNoOut = widget.record.plateNo;
+      _outCacheKey = widget.record.plateNo.trim();
       _haulerOut = widget.record.hauler;
       // Get current user as checker
       final user = context.read<AuthProvider>().user;
@@ -167,14 +173,11 @@ class _ProcessScreenState extends State<ProcessScreen> {
         _formCache.setCurrent(initialCno, gate: 'IN');
         _applyCachedForm(initialCno, gate: 'IN');
       } else {
-        // For OUT, prefer plate no as cache key if available
-        final plate = _plateNoOut.trim();
-        if (plate.isNotEmpty) {
-          _formCache.setCurrent(plate, gate: 'OUT');
-          _applyCachedForm(plate, gate: 'OUT');
-        } else {
-          _formCache.setCurrent(initialCno, gate: 'OUT');
-          _applyCachedForm(initialCno, gate: 'OUT');
+        // For OUT, always use a stable plate cache key for this screen session.
+        if (_outCacheKey.isEmpty) _outCacheKey = initialCno;
+        if (_outCacheKey.isNotEmpty) {
+          _formCache.setCurrent(_outCacheKey, gate: 'OUT');
+          _applyCachedForm(_outCacheKey, gate: 'OUT');
         }
       }
       // Trigger guarded refresh to load cached uploaded images immediately
@@ -233,20 +236,11 @@ class _ProcessScreenState extends State<ProcessScreen> {
         final cno = _containerNoOut.text.trim();
         if (cno.isNotEmpty) {
           _imageProvider.setCurrentContainer(cno);
-          // Debounce refresh of uploaded images when user types/selects container
+          // Debounce refresh only. Do not apply/save OUT cache while typing,
+          // otherwise partial search text can overwrite cached container_no.
           _searchDebounce?.cancel();
           _searchDebounce = Timer(const Duration(milliseconds: 600), () {
             _refreshUploadedImages();
-            // For OUT, prefer plate no as cache key if available
-            final plate = _plateNoOut.trim();
-            if (plate.isNotEmpty) {
-              _formCache.setCurrent(plate, gate: 'OUT');
-              _applyCachedForm(plate, gate: 'OUT');
-            } else {
-              _formCache.setCurrent(cno, gate: 'OUT');
-              _applyCachedForm(cno, gate: 'OUT');
-            }
-            _saveCache();
           });
         }
       }
@@ -294,7 +288,11 @@ class _ProcessScreenState extends State<ProcessScreen> {
             _applyCachedForm(key, gate: 'IN');
           }
         } else {
-          final plateKey = _plateNoOut.trim().isNotEmpty ? _plateNoOut.trim() : _containerNoOut.text.trim();
+          final plateKey = _outCacheKey.isNotEmpty
+              ? _outCacheKey
+              : (_plateNoOut.trim().isNotEmpty
+                  ? _plateNoOut.trim()
+                  : _containerNoOut.text.trim());
           if (plateKey.isNotEmpty) {
             _formCache.setCurrent(plateKey, gate: 'OUT');
             _applyCachedForm(plateKey, gate: 'OUT');
@@ -308,6 +306,41 @@ class _ProcessScreenState extends State<ProcessScreen> {
     _dateManufactured.text = '';
     _isoCodeIn.text = '';
     _remarksIn.text = '';
+  }
+
+  /// Try to match a container status value (numeric id or text label) to _statusOptions.
+  /// If options aren't loaded yet, store it as pending for later matching.
+  void _tryApplyContainerStatus(String rawStatus) {
+    if (rawStatus.isEmpty) return;
+
+    if (_statusOptions.isEmpty) {
+      // Options not loaded yet - store for later
+      _pendingStatusOutValue = rawStatus;
+      return;
+    }
+
+    // Try numeric ID first
+    int? containerStatusId = int.tryParse(rawStatus);
+    if (containerStatusId != null &&
+        containerStatusId > 0 &&
+        _statusOptions.any((opt) => opt.id == containerStatusId)) {
+      _selectedStatusOut = containerStatusId;
+      _pendingStatusOutValue = ''; // Clear pending
+      return;
+    }
+
+    // Try matching by label (case-insensitive)
+    final match = _statusOptions.firstWhere(
+        (opt) => opt.label.toLowerCase() == rawStatus.toLowerCase(),
+        orElse: () => LookupItem(id: 0, label: ''));
+    if (match.id > 0) {
+      _selectedStatusOut = match.id;
+      _pendingStatusOutValue = ''; // Clear pending
+      return;
+    }
+
+    // Couldn't match - store for retry if options change
+    _pendingStatusOutValue = rawStatus;
   }
 
   void _applyCachedForm(String key, {required String gate}) {
@@ -341,17 +374,30 @@ class _ProcessScreenState extends State<ProcessScreen> {
       } else {
         if (cache != null) {
           try { print('ProcessScreen: OUT cache keys=${cache.keys.toList()}'); } catch (_) {}
-          try { print('ProcessScreen: OUT cache iso="${cache['iso_code']}" remarks="${cache['remarks']}"'); } catch (_) {}
+          try { print('ProcessScreen: OUT cache iso="${cache['iso_code']}" remarks="${cache['remarks']}" class=${cache['class']} status=${cache['status']}'); } catch (_) {}
           if (cache.containsKey('container_no')) _containerNoOut.text = cache['container_no'] ?? '';
           if (cache.containsKey('iso_code')) _isoCodeOut.text = cache['iso_code'] ?? '';
           if (cache.containsKey('remarks')) _remarksOut.text = cache['remarks'] ?? '';
-          if (cache.containsKey('size_type')) _selectedSizeTypeOut = cache['size_type'] as int?;
-          if (cache.containsKey('class')) _selectedClassOut = cache['class'] as int?;
-          if (cache.containsKey('status')) _selectedStatusOut = cache['status'] as int?;
+          if (cache.containsKey('size_type')) {
+            _selectedSizeTypeOut = cache['size_type'] as int?;
+            try { print('ProcessScreen: Applied cached size_type: ${cache['size_type']} (type: ${cache['size_type'].runtimeType})'); } catch (_) {}
+          }
+          if (cache.containsKey('class') && cache['class'] != null) {
+            final classVal = cache['class'];
+            _selectedClassOut = classVal as int?;
+            try { print('ProcessScreen: Applied cached class: $classVal (type: ${classVal.runtimeType}) -> _selectedClassOut=$_selectedClassOut'); } catch (_) {}
+          }
+          if (cache.containsKey('status') && cache['status'] != null) {
+            final statusVal = cache['status'];
+            _selectedStatusOut = statusVal as int?;
+            try { print('ProcessScreen: Applied cached status: $statusVal (type: ${statusVal.runtimeType}) (statusOptions.length=${_statusOptions.length}) -> _selectedStatusOut=$_selectedStatusOut'); } catch (_) {}
+          }
           if (cache.containsKey('client_id')) _clientIdOut = cache['client_id'] as int?;
           if (cache.containsKey('client_name')) _clientNameOut = cache['client_name'] ?? '';
           if (cache.containsKey('plate_no')) _plateNoOut = cache['plate_no'] ?? _plateNoOut;
           if (cache.containsKey('hauler')) _haulerOut = cache['hauler'] ?? _haulerOut;
+        } else {
+          try { print('ProcessScreen: No cache found for OUT gate key=$key'); } catch (_) {}
         }
       }
       if (mounted) setState(() {});
@@ -372,12 +418,20 @@ class _ProcessScreenState extends State<ProcessScreen> {
         }
       } catch (_) {}
       _applyingCache = false;
-    } catch (_) {}
+    } catch (e) {
+      try { print('ProcessScreen: Error applying cache: $e'); } catch (_) {}
+    }
   }
 
   void _saveCache() {
     try {
-      final key = !_isOut ? _containerNoIn.text.trim() : (_plateNoOut.trim().isNotEmpty ? _plateNoOut.trim() : _containerNoOut.text.trim());
+      final key = !_isOut
+          ? _containerNoIn.text.trim()
+          : (_outCacheKey.isNotEmpty
+              ? _outCacheKey
+              : (_plateNoOut.trim().isNotEmpty
+                  ? _plateNoOut.trim()
+                  : _containerNoOut.text.trim()));
       if (key.isEmpty) return;
       final Map<String, dynamic> data = {};
       if (!_isOut) {
@@ -389,12 +443,17 @@ class _ProcessScreenState extends State<ProcessScreen> {
         data['status'] = _selectedStatusIn;
         data['checker_name'] = _checkerNameIn;
       } else {
+        final existing = _formCache.getCached(key, gate: 'OUT');
         data['iso_code'] = _isoCodeOut.text.trim();
         data['container_no'] = _containerNoOut.text.trim();
-        data['remarks'] = _remarksOut.text.trim();
+        final currentRemarks = _remarksOut.text.trim();
+        final cachedRemarks = (existing?['remarks'] ?? '').toString().trim();
+        // Do not overwrite a non-empty cached remarks value with an empty value
+        // that can come from API/bootstrap timing.
+        data['remarks'] = currentRemarks.isNotEmpty ? currentRemarks : cachedRemarks;
         data['size_type'] = _selectedSizeTypeOut;
-        data['class'] = _selectedClassOut;
-        data['status'] = _selectedStatusOut;
+        data['class'] = _selectedClassOut ?? existing?['class'];
+        data['status'] = _selectedStatusOut ?? existing?['status'];
         data['client_id'] = _clientIdOut;
         data['client_name'] = _clientNameOut;
         data['plate_no'] = _plateNoOut;
@@ -488,6 +547,24 @@ class _ProcessScreenState extends State<ProcessScreen> {
 
         // Do NOT set any defaults - leave all as null (no selection)
         // Values will only be set if API returns non-empty data
+        
+        // If we have a pending status from a fetch that happened before options loaded,
+        // try to apply it now that options are available
+        if (_pendingStatusOutValue.isNotEmpty) {
+          _tryApplyContainerStatus(_pendingStatusOutValue);
+        }
+
+        // Also re-validate cached status/class values that may have been applied before
+        // options were loaded. This ensures they display correctly in dropdowns.
+        if (_isOut && _selectedStatusOut != null && _selectedStatusOut! > 0) {
+          // Verify cached status exists in options, if not clear it
+          if (!_statusOptions.any((opt) => opt.id == _selectedStatusOut)) {
+            try { print('ProcessScreen: Cached status $_selectedStatusOut not found in loaded options, clearing'); } catch (_) {}
+            _selectedStatusOut = null;
+          } else {
+            try { print('ProcessScreen: Cached status $_selectedStatusOut validated against loaded options'); } catch (_) {}
+          }
+        }
       });
 
       // NOW that options are loaded, reload container details so they can be properly validated and set
@@ -496,6 +573,13 @@ class _ProcessScreenState extends State<ProcessScreen> {
       } else if (_isOut && _containerNoOut.text.isNotEmpty) {
         // For Gate OUT, fetch all container details after lookups are loaded
         await _loadGateOutContainerDetails();
+      }
+
+      // After loading options, ensure UI reflects any cached values that were applied before options loaded
+      if (mounted) {
+        setState(() {
+          try { print('ProcessScreen: Final rebuild after options loaded - statusOptions.length=${_statusOptions.length}, _selectedStatusOut=$_selectedStatusOut, _selectedClassOut=$_selectedClassOut'); } catch (_) {}
+        });
       }
     } catch (e) {
       if (mounted) {
@@ -659,14 +743,11 @@ class _ProcessScreenState extends State<ProcessScreen> {
             }
           }
 
-          // Set container status from inventory
-          final containerStatusId =
-              int.tryParse(details['container_status']?.toString() ?? '0');
-          if (containerStatusId != null &&
-              containerStatusId > 0 &&
-              _statusOptions.any((opt) => opt.id == containerStatusId)) {
-            _selectedStatusOut = containerStatusId;
-          }
+          // Set container status from inventory. API may return either an
+          // integer id (foreign key) or the status string. Handle both.
+          // May need to retry after options load if they weren't available yet.
+          final rawStatus = details['container_status']?.toString() ?? '';
+          _tryApplyContainerStatus(rawStatus);
 
           // Set approval notes from inventory
           _approvalNotesOut =
@@ -675,9 +756,13 @@ class _ProcessScreenState extends State<ProcessScreen> {
           // Set gate in remarks from inventory remarks field
           _gateInRemarksOut = details['remarks']?.toString().trim() ?? '';
 
-          // Set remarks from pre_inventory
-          _remarksOut.text =
+          // Set remarks from pre_inventory only when API has a value.
+          // Keep cached/user-entered remarks if API remarks is empty.
+          final preRemarks =
               details['pre_inventory_remarks']?.toString().trim() ?? '';
+          if (preRemarks.isNotEmpty) {
+            _remarksOut.text = preRemarks;
+          }
         });
         // Mark that these values came from a fetch/load, not from user typing
         _userEdited = false;
@@ -687,7 +772,11 @@ class _ProcessScreenState extends State<ProcessScreen> {
           _imageProvider.setCurrentContainer(_containerNoOut.text.trim());
           await _refreshUploadedImages();
           // Apply any cached form values for this container/plate
-          final plateKey = _plateNoOut.trim().isNotEmpty ? _plateNoOut.trim() : _containerNoOut.text.trim();
+          final plateKey = _outCacheKey.isNotEmpty
+              ? _outCacheKey
+              : (_plateNoOut.trim().isNotEmpty
+                  ? _plateNoOut.trim()
+                  : _containerNoOut.text.trim());
           _formCache.setCurrent(plateKey, gate: 'OUT');
           _applyCachedForm(plateKey, gate: 'OUT');
         } catch (_) {}
@@ -857,6 +946,11 @@ class _ProcessScreenState extends State<ProcessScreen> {
       }
     }
 
+    // Reposition dropdown on any scroll to keep it attached below container search
+    if (_dropdownOverlay != null && _containerSearchResults.isNotEmpty) {
+      _dropdownOverlay!.markNeedsBuild();
+    }
+
     return false;
   }
 
@@ -895,42 +989,51 @@ class _ProcessScreenState extends State<ProcessScreen> {
         _containerSearchKey.currentContext?.findRenderObject() as RenderBox;
     if (renderBox == null) return;
 
-    final size = renderBox.size;
-    final offset = renderBox.localToGlobal(Offset.zero);
-
     _dropdownOverlay = OverlayEntry(
-      builder: (context) => Positioned(
-        left: offset.dx,
-        top: offset.dy + size.height + 4,
-        width: size.width,
-        child: Material(
-          elevation: 4,
-          borderRadius: BorderRadius.circular(8),
-          child: Container(
-            constraints: const BoxConstraints(maxHeight: 250),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(8),
-              color: Colors.white,
-            ),
-            child: ListView.builder(
-              shrinkWrap: true,
-              itemCount: _containerSearchResults.length,
-              itemBuilder: (context, index) {
-                final container = _containerSearchResults[index];
-                return ListTile(
-                  dense: true,
-                  title: Text(container.containerNo,
-                      style: const TextStyle(fontWeight: FontWeight.bold)),
-                  onTap: () {
-                    _selectContainer(container);
-                    _hideContainerDropdown();
-                  },
-                );
-              },
+      builder: (context) {
+        // Recalculate position on every build to follow scroll
+        final RenderBox? currentRenderBox =
+            _containerSearchKey.currentContext?.findRenderObject() as RenderBox?;
+        if (currentRenderBox == null) {
+          return const SizedBox.shrink();
+        }
+
+        final size = currentRenderBox.size;
+        final offset = currentRenderBox.localToGlobal(Offset.zero);
+
+        return Positioned(
+          left: offset.dx,
+          top: offset.dy + size.height + 4,
+          width: size.width,
+          child: Material(
+            elevation: 4,
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              constraints: const BoxConstraints(maxHeight: 250),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(8),
+                color: Colors.white,
+              ),
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: _containerSearchResults.length,
+                itemBuilder: (context, index) {
+                  final container = _containerSearchResults[index];
+                  return ListTile(
+                    dense: true,
+                    title: Text(container.containerNo,
+                        style: const TextStyle(fontWeight: FontWeight.bold)),
+                    onTap: () {
+                      _selectContainer(container);
+                      _hideContainerDropdown();
+                    },
+                  );
+                },
+              ),
             ),
           ),
-        ),
-      ),
+        );
+      },
     );
 
     Overlay.of(context).insert(_dropdownOverlay!);
@@ -956,6 +1059,13 @@ class _ProcessScreenState extends State<ProcessScreen> {
   void _selectContainer(ContainerSearchResult container) {
     _hideContainerDropdown();
 
+    // Keep OUT cache key stable per opened pre-out plate.
+    if (_outCacheKey.isEmpty) {
+      _outCacheKey = _plateNoOut.trim().isNotEmpty
+          ? _plateNoOut.trim()
+          : _containerNoOut.text.trim();
+    }
+
     setState(() {
       _containerNoOut.text = container.containerNo;
       _selectedContainerId = container.id;
@@ -963,7 +1073,6 @@ class _ProcessScreenState extends State<ProcessScreen> {
       _clientIdOut = container.clientId;
       _selectedSizeTypeOut = container.sizeTypeId;
       _isoCodeOut.text = container.isoCode;
-      _plateNoOut = container.plateNo;
       _haulerOut = container.hauler;
       // When user selects from search, treat container as not yet fetched/saved
       _containerFetched = false;
@@ -989,12 +1098,16 @@ class _ProcessScreenState extends State<ProcessScreen> {
 
     // Mark that the upcoming fetch was triggered by a user selection
     _lastFetchFromSelection = true;
-    // Fetch additional container details from inventory
+
+    // Save selected container immediately to the same OUT plate cache key.
+    if (_outCacheKey.isNotEmpty) {
+      _formCache.setCurrent(_outCacheKey, gate: 'OUT');
+      _saveCache();
+    }
+
+    // Fetch additional container details from inventory.
+    // After fetch completes, _saveCache() will be called with full/fetched data
     _fetchContainerDetailsForGateOut(container.containerNo);
-    // Set cache key (prefer plate no for OUT) and persist current state
-    final key = container.plateNo.isNotEmpty ? container.plateNo : container.containerNo;
-    _formCache.setCurrent(key, gate: 'OUT');
-    _saveCache();
   }
 
   Future<void> _fetchContainerDetailsForGateOut(String containerNo) async {
@@ -1019,18 +1132,33 @@ class _ProcessScreenState extends State<ProcessScreen> {
           // Set gate in remarks from inventory remarks field
           _gateInRemarksOut = details['remarks']?.toString().trim() ?? '';
 
-          // Set remarks from pre_inventory
-          _remarksOut.text =
+          // Set remarks from pre_inventory only when API has a value.
+          // Keep cached/user-entered remarks if API remarks is empty.
+          final preRemarks =
               details['pre_inventory_remarks']?.toString().trim() ?? '';
-
-          // Pre-fill container status from inventory
-          final containerStatusId =
-              int.tryParse(details['container_status']?.toString() ?? '0');
-          if (containerStatusId != null &&
-              containerStatusId > 0 &&
-              _statusOptions.any((opt) => opt.id == containerStatusId)) {
-            _selectedStatusOut = containerStatusId;
+          if (preRemarks.isNotEmpty) {
+            _remarksOut.text = preRemarks;
           }
+
+          // Set class from API response if provided
+          final classStr = details['class']?.toString().trim() ?? '';
+          if (classStr.isNotEmpty) {
+            if (classStr == 'A') {
+              _selectedClassOut = 1;
+            } else if (classStr == 'B') {
+              _selectedClassOut = 2;
+            } else if (classStr == 'C') {
+              _selectedClassOut = 3;
+            }
+          }
+          try { print('DEBUG: Fetched class from API: classStr="$classStr" _selectedClassOut=$_selectedClassOut'); } catch (_) {}
+
+          // Pre-fill container status from inventory. Accept numeric id or
+          // textual status and map to the corresponding lookup option.
+          // May need to retry after options load if they weren't available yet.
+          final rawStatus = details['container_status']?.toString() ?? '';
+          try { print('DEBUG: Fetched container_status from API: rawStatus="$rawStatus" container_status=${details['container_status']}'); } catch (_) {}
+          _tryApplyContainerStatus(rawStatus);
           // Only consider container as "fetched" when API returned meaningful data
           _containerFetched = _hasValidContainerDetails(details);
         });
@@ -1041,6 +1169,8 @@ class _ProcessScreenState extends State<ProcessScreen> {
         }
         _lastFetchFromSelection = false;
         _updateCameraEnabled();
+        // Save the fetched status and other fields to cache
+        _saveCache();
       }
     } catch (e) {
       print('DEBUG: Error fetching container details for Gate OUT: $e');
@@ -1586,6 +1716,22 @@ class _ProcessScreenState extends State<ProcessScreen> {
             'checker_id': _checkerIdOut,
           },
         );
+
+        // Submission succeeded; clear OUT cache for this pre-out plate/session.
+        // Also clear legacy container-keyed cache if present.
+        final plateKey = _outCacheKey.isNotEmpty
+            ? _outCacheKey
+            : (_plateNoOut.trim().isNotEmpty
+                ? _plateNoOut.trim()
+                : _containerNoOut.text.trim());
+        final containerKey = _containerNoOut.text.trim();
+        if (plateKey.isNotEmpty) {
+          await _formCache.clearFor(plateKey, gate: 'OUT');
+        }
+        if (containerKey.isNotEmpty &&
+            containerKey.toUpperCase() != plateKey.toUpperCase()) {
+          await _formCache.clearFor(containerKey, gate: 'OUT');
+        }
       } else {
         final classValue =
             _selectedClassIn == 1 ? 'A' : (_selectedClassIn == 2 ? 'B' : 'C');
@@ -1935,7 +2081,7 @@ class _ProcessScreenState extends State<ProcessScreen> {
                         setState(() => _selectedStatusOut = value);
                         _saveCache();
                       },
-                      hintText: 'Select Container Status',
+                      hintText: 'Container Status',
                       enabled: false,
                     ),
                     const SizedBox(height: 16),
@@ -2140,7 +2286,7 @@ class _ProcessScreenState extends State<ProcessScreen> {
                         setState(() => _selectedStatusIn = value);
                         _saveCache();
                       },
-                      hintText: 'Select Container Status',
+                      hintText: 'Container Status',
                     ),
                     const SizedBox(height: 16),
 
