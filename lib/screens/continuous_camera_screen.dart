@@ -1,10 +1,12 @@
 import 'dart:io';
+import 'dart:async';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:image/image.dart' as img;
+import 'package:sensors_plus/sensors_plus.dart';
 
 import '../services/image_provider_service.dart';
 
@@ -26,16 +28,20 @@ class _ContinuousCameraScreenState extends State<ContinuousCameraScreen> {
   final _imageProvider = ImageProviderService();
   CameraController? _cameraController;
   Future<void>? _initializeControllerFuture;
+  StreamSubscription<AccelerometerEvent>? _accelerometerSubscription;
+  int? _tiltRotationAngle;
+  FlashMode _flashMode = FlashMode.off;
 
   bool _isTakingPhoto = false;
   bool _isInitializingCamera = true;
-  bool _isPreviewExpanded = false;
+  bool _isPreviewExpanded = true;
   String? _cameraError;
 
   @override
   void initState() {
     super.initState();
     _lockToPortrait();
+    _startOrientationTracking();
     // Set provider's current container if provided so images are cached per container
     if (widget.containerNo != null && widget.containerNo!.trim().isNotEmpty) {
       _imageProvider.setCurrentContainer(widget.containerNo!);
@@ -76,6 +82,14 @@ class _ContinuousCameraScreenState extends State<ContinuousCameraScreen> {
       _initializeControllerFuture = _cameraController!.initialize();
       await _initializeControllerFuture;
 
+      // Apply initial flash mode after initialization
+      try {
+        await _cameraController!.setFlashMode(_flashMode);
+      } catch (e) {
+        // Some devices may not support certain flash modes
+        print('DEBUG: Unable to set flash mode: $e');
+      }
+
       if (!mounted) return;
       setState(() {
         _isInitializingCamera = false;
@@ -90,7 +104,102 @@ class _ContinuousCameraScreenState extends State<ContinuousCameraScreen> {
     }
   }
 
-  Future<File> _saveToLocalStorage(File capturedFile) async {
+  Future<void> _applyFlashMode() async {
+    if (_cameraController == null || !_cameraController!.value.isInitialized) return;
+    try {
+      await _cameraController!.setFlashMode(_flashMode);
+    } catch (e) {
+      print('DEBUG: Error applying flash mode: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Flash mode not supported on this device')),
+        );
+      }
+    }
+  }
+
+  void _cycleFlashMode() {
+    setState(() {
+      if (_flashMode == FlashMode.off) {
+        _flashMode = FlashMode.torch; // continuous light
+      } else if (_flashMode == FlashMode.torch) {
+        _flashMode = FlashMode.auto;
+      } else {
+        _flashMode = FlashMode.off;
+      }
+    });
+    _applyFlashMode();
+  }
+
+  void _startOrientationTracking() {
+    _accelerometerSubscription =
+        accelerometerEventStream(samplingPeriod: SensorInterval.uiInterval)
+            .listen((event) {
+      final x = event.x;
+      final y = event.y;
+
+      // When x dominates, the phone is physically landscape.
+      // x < 0 => left tilt (90), x > 0 => right tilt (-90).
+      int? nextAngle;
+      if (x.abs() > y.abs() && x.abs() > 6) {
+        nextAngle = x < 0 ? 90 : -90;
+      }
+
+      if (nextAngle != _tiltRotationAngle && mounted) {
+        setState(() {
+          _tiltRotationAngle = nextAngle;
+        });
+      }
+    });
+  }
+
+  Widget _buildRotationIndicator() {
+    final isLeft = _tiltRotationAngle == 90;
+    final isRight = _tiltRotationAngle == -90;
+    final label = isLeft
+      ? 'Rotate: LEFT'
+        : isRight
+        ? 'Rotate: RIGHT'
+        : 'Rotate: DEFAULT';
+
+    return Positioned(
+      top: 12,
+      right: 12,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.black.withOpacity(0.65),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: Colors.white24),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              isLeft
+                  ? Icons.rotate_left
+                  : isRight
+                      ? Icons.rotate_right
+                      : Icons.screen_rotation_alt,
+              color: Colors.white,
+              size: 18,
+            ),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<File> _saveToLocalStorage(File capturedFile, {required int rotationAngle}) async {
     final appDir = await getApplicationDocumentsDirectory();
     final photosDir = Directory('${appDir.path}/captured_images');
     if (!photosDir.existsSync()) {
@@ -102,11 +211,14 @@ class _ContinuousCameraScreenState extends State<ContinuousCameraScreen> {
     final File copied = await capturedFile.copy(savedPath);
 
     try {
-      // Read bytes and resize to 480x640 (portrait)
+      // Read bytes, rotate based on device direction, then resize to 640x480 (landscape)
       final bytes = await copied.readAsBytes();
       final decoded = img.decodeImage(bytes);
       if (decoded != null) {
-        final resized = img.copyResize(decoded, width: 480, height: 640);
+        // Normalize EXIF orientation first, then rotate according to current device orientation.
+        final normalized = img.bakeOrientation(decoded);
+        final rotated = img.copyRotate(normalized, angle: rotationAngle);
+        final resized = img.copyResize(rotated, width: 640, height: 480);
         final jpg = img.encodeJpg(resized, quality: 85);
         await copied.writeAsBytes(jpg, flush: true);
       }
@@ -136,7 +248,17 @@ class _ContinuousCameraScreenState extends State<ContinuousCameraScreen> {
     try {
       await _initializeControllerFuture;
       final XFile picture = await _cameraController!.takePicture();
-      final File savedFile = await _saveToLocalStorage(File(picture.path));
+      final deviceOrientation = _cameraController!.value.deviceOrientation;
+      final fallbackRotation = deviceOrientation == DeviceOrientation.landscapeLeft
+          ? 90
+          : deviceOrientation == DeviceOrientation.landscapeRight
+            ? -90
+            : -90;
+      final rotationAngle = _tiltRotationAngle ?? fallbackRotation;
+      final File savedFile = await _saveToLocalStorage(
+        File(picture.path),
+        rotationAngle: rotationAngle,
+      );
 
       if (!mounted) return;
       _imageProvider.addImage(savedFile);
@@ -157,6 +279,7 @@ class _ContinuousCameraScreenState extends State<ContinuousCameraScreen> {
 
   @override
   void dispose() {
+    _accelerometerSubscription?.cancel();
     _unlockOrientations();
     _cameraController?.dispose();
     super.dispose();
@@ -195,7 +318,7 @@ class _ContinuousCameraScreenState extends State<ContinuousCameraScreen> {
               crossAxisCount: 3,
               crossAxisSpacing: 8,
               mainAxisSpacing: 8,
-              childAspectRatio: 3 / 4,
+              childAspectRatio: 4 / 3,
             ),
             itemCount: _imageProvider.images.length,
             itemBuilder: (context, index) {
@@ -376,6 +499,52 @@ class _ContinuousCameraScreenState extends State<ContinuousCameraScreen> {
         ),
         actions: [
           Padding(
+            padding: const EdgeInsets.all(12),
+            child: Center(
+              child: GestureDetector(
+                onTap: _cycleFlashMode,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: Colors.grey[800],
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: Colors.white24),
+                  ),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 6,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        _flashMode == FlashMode.off
+                            ? Icons.flash_off
+                            : _flashMode == FlashMode.torch
+                                ? Icons.flash_on
+                                : Icons.flash_auto,
+                        color: Colors.white,
+                        size: 18,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        _flashMode == FlashMode.off
+                            ? 'Flash Off'
+                            : _flashMode == FlashMode.torch
+                                ? 'Flash On'
+                                : 'Auto',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Padding(
             padding: const EdgeInsets.all(16),
             child: Center(
               child: Container(
@@ -450,6 +619,7 @@ class _ContinuousCameraScreenState extends State<ContinuousCameraScreen> {
                         ),
             ),
             _buildPreviewToggleHandle(),
+            _buildRotationIndicator(),
             _buildPreviewPopup(height: previewPanelHeight),
             // Centered capture button
             Positioned(
