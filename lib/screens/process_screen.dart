@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import 'dart:async';
 import 'dart:io';
@@ -14,6 +15,7 @@ import '../services/image_upload_service.dart';
 import '../services/image_provider_service.dart';
 import '../services/form_cache_service.dart';
 import '../screens/continuous_camera_screen.dart';
+import '../screens/image_preview_viewer.dart';
 import '../utils/error_handler.dart';
 
 class ProcessScreen extends StatefulWidget {
@@ -54,6 +56,7 @@ class ContainerSearchResult {
 }
 
 class _ProcessScreenState extends State<ProcessScreen> {
+  static const int _maxTotalImages = 100;
   final GateService _gateService = GateService();
   final ImageUploadService _imageUploadService = ImageUploadService();
   final _imageProvider = ImageProviderService();
@@ -96,6 +99,8 @@ class _ProcessScreenState extends State<ProcessScreen> {
   bool _isoFetched = false;
   bool _containerFetched = false;
   bool _refreshingUploadedImages = false;
+  bool _refreshUploadedImagesQueued = false;
+  String _imageDateCompleted = '';
   // Flag to prevent saving cache while applying cached values
   bool _applyingCache = false;
   // Flag to prevent listener side effects while hydrating Gate IN fields from API
@@ -133,13 +138,14 @@ class _ProcessScreenState extends State<ProcessScreen> {
   // Gate OUT - Plate number and Hauler
   String _plateNoOut = '';
   String _haulerOut = '';
-  // Stable cache key for Gate OUT (opened pre-out plate)
+  // Stable cache key for the specific Pre-Out record.
   String _outCacheKey = '';
-  String _buildOutCacheKey({String? plate, String? container}) {
-    final p = (plate ?? _plateNoOut).trim().toUpperCase();
-    final c = (container ?? _containerNoOut.text).trim().toUpperCase();
-    if (p.isEmpty && c.isEmpty) return '';
-    return '$p|$c';
+  String _buildOutCacheKey({String? plate, String? hauler, String? dateAdded}) {
+    final p = (plate ?? widget.record.plateNo).trim().toUpperCase();
+    final h = (hauler ?? widget.record.hauler).trim().toUpperCase();
+    final d = (dateAdded ?? widget.record.dateAdded).trim().toUpperCase();
+    if (p.isEmpty && h.isEmpty && d.isEmpty) return '';
+    return '$p|$h|$d';
   }
 
   // Gate OUT - Additional details from inventory
@@ -148,18 +154,15 @@ class _ProcessScreenState extends State<ProcessScreen> {
 
   bool get _isOut => widget.record.gateStatus.toUpperCase() == 'OUT';
 
-  String _buildOutImageCacheKey(String containerNo) {
-    final cno = containerNo.trim().toUpperCase();
-    final plate = _plateNoOut.trim().toUpperCase();
-    if (cno.isEmpty || plate.isEmpty) return '';
-    return 'OUT|$cno|$plate';
-  }
-
   String _buildImageCacheKey(String containerNo) {
     final cno = containerNo.trim();
+    if (_isOut) {
+      final recordKey = _buildOutCacheKey();
+      return recordKey.isEmpty ? '' : 'OUT|$recordKey';
+    }
     if (cno.isEmpty) return '';
-    if (_isOut) return _buildOutImageCacheKey(cno);
-    return cno.toUpperCase();
+    final completionDate = _imageDateForRecord() ?? 'NO_DATE';
+    return 'IN|$completionDate|${cno.toUpperCase()}';
   }
 
   void _setImageProviderContextForContainer(String containerNo) {
@@ -168,9 +171,38 @@ class _ProcessScreenState extends State<ProcessScreen> {
     _imageProvider.setCurrentContainer(key);
   }
 
+  void _handleSubmitFieldChanged() {
+    if (mounted) setState(() {});
+  }
+
+  bool get _hasSubmitImages {
+    final containerNo = (_isOut ? _containerNoOut : _containerNoIn).text.trim();
+    if (containerNo.isEmpty) return false;
+
+    final hasTakenImages = _imageProvider.images.any((file) => file.existsSync());
+    return hasTakenImages || _imageProvider.uploadedImages.isNotEmpty;
+  }
+
+  bool get _canSubmit {
+    if (_submitting || _uploadingImages || !_hasSubmitImages) return false;
+
+    if (_isOut) {
+      return _containerNoOut.text.trim().isNotEmpty &&
+          _remarksOut.text.trim().isNotEmpty;
+    }
+
+    return _selectedSizeTypeIn != null &&
+        _isoCodeIn.text.trim().isNotEmpty &&
+        _isValidManufacturedDate(_dateManufactured.text.trim()) &&
+        _selectedClassIn != null &&
+        _selectedStatusIn != null &&
+        _remarksIn.text.trim().isNotEmpty;
+  }
+
   @override
   void initState() {
     super.initState();
+    _imageDateCompleted = widget.record.dateCompleted.trim();
     if (_isOut) {
       // Initialize Gate OUT fields from PreRecord
       // Only pre-fill container number when it's a valid, non-placeholder value.
@@ -179,8 +211,12 @@ class _ProcessScreenState extends State<ProcessScreen> {
         _containerNoOut.text = containerNoFromRecord;
       }
       _plateNoOut = widget.record.plateNo;
-      _outCacheKey = _buildOutCacheKey(plate: widget.record.plateNo, container: _containerNoOut.text);
       _haulerOut = widget.record.hauler;
+      _outCacheKey = _buildOutCacheKey(
+        plate: widget.record.plateNo,
+        hauler: widget.record.hauler,
+        dateAdded: widget.record.dateAdded,
+      );
       // Get current user as checker
       final user = context.read<AuthProvider>().user;
       if (user != null) {
@@ -202,27 +238,14 @@ class _ProcessScreenState extends State<ProcessScreen> {
         _formCache.setCurrent(initialCno, gate: 'IN');
         _applyCachedForm(initialCno, gate: 'IN');
       } else {
-        // For OUT, prefer combined plate|container cache key. Fall back to
-        // plate-only or container-only for backward compatibility.
+        // For OUT, use the specific record identity: plate, hauler, date added.
         final combined = _buildOutCacheKey();
-        if (combined.isEmpty) {
-          // Try to initialize from initialCno (container) and plate
-          _outCacheKey = _buildOutCacheKey(plate: _plateNoOut, container: initialCno);
-        }
         if (combined.isNotEmpty && _formCache.getCached(combined, gate: 'OUT') != null) {
           _formCache.setCurrent(combined, gate: 'OUT');
           _applyCachedForm(combined, gate: 'OUT');
-        } else {
-          final plateOnly = _plateNoOut.trim().isNotEmpty ? _plateNoOut.trim() : '';
-          final containerOnly = initialCno.isNotEmpty ? initialCno : '';
-          final fallback = plateOnly.isNotEmpty ? plateOnly : containerOnly;
-          if (fallback.isNotEmpty) {
-            _formCache.setCurrent(fallback, gate: 'OUT');
-            _applyCachedForm(fallback, gate: 'OUT');
-          }
         }
       }
-      // Trigger guarded refresh to load cached uploaded images immediately
+      // Fetch server images for this date, gate direction, and container immediately.
       WidgetsBinding.instance.addPostFrameCallback((_) => _refreshUploadedImages());
 
       // Listen for upload progress/completion events so UI stays disabled until finished
@@ -232,14 +255,11 @@ class _ProcessScreenState extends State<ProcessScreen> {
           if (mounted) {
             setState(() {
               _uploadProgress = status.progress;
-              _showUploadProgress = !status.completed;
-              _uploadingImages = !status.completed;
+              if (!status.completed) {
+                _showUploadProgress = true;
+                _uploadingImages = true;
+              }
             });
-            if (status.completed) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text(status.message ?? 'Upload completed')),
-              );
-            }
           }
         }
       });
@@ -302,18 +322,22 @@ class _ProcessScreenState extends State<ProcessScreen> {
       if (mounted && !_applyingCache && !_hydratingGateInFromApi) _saveCache();
     });
     _remarksIn.addListener(() {
+      _handleSubmitFieldChanged();
       if (mounted && !_applyingCache && !_hydratingGateInFromApi) _saveCache();
     });
     _dateManufactured.addListener(() {
+      _handleSubmitFieldChanged();
       if (mounted && !_applyingCache && !_hydratingGateInFromApi) _saveCache();
     });
     // listen for Gate OUT field changes to persist cache
     _remarksOut.addListener(() {
+      _handleSubmitFieldChanged();
       if (mounted && !_applyingCache) _saveCache();
     });
     _isoCodeOut.addListener(() {
       if (mounted && !_applyingCache) _saveCache();
     });
+    _imageProvider.addListener(_handleSubmitFieldChanged);
     // Initialize camera enabled state (will be updated after loads)
     _updateCameraEnabled();
     // Refresh uploaded images and load persisted form cache when opening the screen
@@ -339,14 +363,6 @@ class _ProcessScreenState extends State<ProcessScreen> {
           if (combined.isNotEmpty && _formCache.getCached(combined, gate: 'OUT') != null) {
             _formCache.setCurrent(combined, gate: 'OUT');
             _applyCachedForm(combined, gate: 'OUT');
-          } else {
-            final plateOnly = _plateNoOut.trim().isNotEmpty ? _plateNoOut.trim() : '';
-            final containerOnly = _containerNoOut.text.trim().isNotEmpty ? _containerNoOut.text.trim() : '';
-            final fallback = plateOnly.isNotEmpty ? plateOnly : containerOnly;
-            if (fallback.isNotEmpty) {
-              _formCache.setCurrent(fallback, gate: 'OUT');
-              _applyCachedForm(fallback, gate: 'OUT');
-            }
           }
         }
       } catch (_) {}
@@ -478,14 +494,7 @@ class _ProcessScreenState extends State<ProcessScreen> {
     try {
         final key = !_isOut
           ? _containerNoIn.text.trim()
-          : (() {
-            // Prefer combined plate|container key for OUT; fallback to legacy keys
-            final combined = _buildOutCacheKey();
-            if (combined.isNotEmpty) return combined;
-            if (_outCacheKey.isNotEmpty) return _outCacheKey;
-            if (_plateNoOut.trim().isNotEmpty) return _plateNoOut.trim();
-            return _containerNoOut.text.trim();
-          })();
+          : _buildOutCacheKey();
       if (key.isEmpty) return;
       final Map<String, dynamic> data = {};
       if (!_isOut) {
@@ -527,14 +536,10 @@ class _ProcessScreenState extends State<ProcessScreen> {
         data['plate_no'] = _plateNoOut;
         data['hauler'] = _haulerOut;
       }
-      // For OUT, prefer setting the combined plate|container current key
+      // For OUT, always save against the specific record identity.
       if (_isOut) {
         final combined = _buildOutCacheKey();
-        if (combined.isNotEmpty) {
-          _formCache.setCurrent(combined, gate: 'OUT');
-        } else {
-          _formCache.setCurrent(key, gate: 'OUT');
-        }
+        if (combined.isNotEmpty) _formCache.setCurrent(combined, gate: 'OUT');
       } else {
         _formCache.setCurrent(key, gate: 'IN');
       }
@@ -544,6 +549,15 @@ class _ProcessScreenState extends State<ProcessScreen> {
   }
 
   Future<void> _refreshUploadedImages() async {
+    // Initialization, lookup loading, and container selection can all request
+    // a refresh at nearly the same time. Queue a follow-up instead of dropping
+    // the request while the first server fetch is still running.
+    if (_refreshingUploadedImages) {
+      _refreshUploadedImagesQueued = true;
+      return;
+    }
+
+    _refreshingUploadedImages = true;
     try {
       final containerNo = _isOut ? _containerNoOut.text.trim() : _containerNoIn.text.trim();
       if (containerNo.isEmpty) {
@@ -551,25 +565,21 @@ class _ProcessScreenState extends State<ProcessScreen> {
         _setImageProviderContextForContainer('');
         _imageProvider.clearUploaded();
         if (mounted) setState(() {});
+        _refreshingUploadedImages = false;
         return;
       }
 
-      // Determine date from the pre-record's dateAdded; fallback to today if parse fails
-      String dateStr;
-      try {
-        final raw = widget.record.dateAdded;
-        final dt = DateTime.tryParse(raw) ?? DateTime.now();
-        dateStr = "${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')}-${dt.year}";
-      } catch (_) {
-        final now = DateTime.now();
-        dateStr = "${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}-${now.year}";
+      final dateStr = _imageDateForRecord();
+      if (dateStr == null) {
+        // Pending records have no completed date, so they must not fetch from
+        // any date folder and must not display unrelated images.
+        _imageProvider.clearUploaded();
+        if (mounted) setState(() {});
+        _refreshingUploadedImages = false;
+        return;
       }
 
       final uploadPath = "container_pics/$dateStr/${_isOut ? 'out' : 'in'}/";
-
-      // Prevent concurrent refreshes
-      if (_refreshingUploadedImages) return;
-      _refreshingUploadedImages = true;
 
       try {
         // Ensure provider is set for this container key, then clear any cached uploaded entries
@@ -594,8 +604,41 @@ class _ProcessScreenState extends State<ProcessScreen> {
         }
       } finally {
         _refreshingUploadedImages = false;
+        if (_refreshUploadedImagesQueued && mounted) {
+          _refreshUploadedImagesQueued = false;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) _refreshUploadedImages();
+          });
+        }
       }
-    } catch (_) {}
+    } catch (_) {
+      // Keep future refreshes working if the date/path lookup itself fails.
+      _refreshingUploadedImages = false;
+    }
+  }
+
+  String? _imageDateForRecord() {
+    // Only completed records have a valid server image date. Pending records
+    // have no date_completed and must not fetch images from any date folder.
+    final raw = _imageDateCompleted.trim();
+    if (raw.isEmpty || raw.toLowerCase() == 'null') return null;
+
+    DateTime? date = DateTime.tryParse(raw);
+
+    // Also support dates returned as MM-DD-YYYY or MM/DD/YYYY.
+    if (date == null) {
+      final match = RegExp(r'^(\d{1,2})[-/](\d{1,2})[-/](\d{4})')
+          .firstMatch(raw);
+      if (match != null) {
+        date = DateTime.tryParse(
+          '${match.group(3)}-${match.group(1)!.padLeft(2, '0')}-${match.group(2)!.padLeft(2, '0')}',
+        );
+      }
+    }
+
+    if (date == null) return null;
+    return '${date.month.toString().padLeft(2, '0')}-'
+        '${date.day.toString().padLeft(2, '0')}-${date.year}';
   }
 
   void _updateCameraEnabled() {
@@ -698,6 +741,10 @@ class _ProcessScreenState extends State<ProcessScreen> {
       if (mounted) {
         _hydratingGateInFromApi = true;
         setState(() {
+          final completedDate = details['date_completed']?.toString().trim() ?? '';
+          if (completedDate.isNotEmpty && completedDate.toLowerCase() != 'null') {
+            _imageDateCompleted = completedDate;
+          }
           _clientNameIn = details['client_name']?.toString() ?? '';
 
           // Set ISO code - ensure it's not null and trim whitespace
@@ -805,6 +852,10 @@ class _ProcessScreenState extends State<ProcessScreen> {
 
       if (mounted) {
         setState(() {
+          final completedDate = details['date_completed']?.toString().trim() ?? '';
+          if (completedDate.isNotEmpty && completedDate.toLowerCase() != 'null') {
+            _imageDateCompleted = completedDate;
+          }
           // Set client name
           _clientNameOut = details['client_name']?.toString() ?? '';
           _clientIdOut = int.tryParse(details['client_id']?.toString() ?? '0');
@@ -863,20 +914,11 @@ class _ProcessScreenState extends State<ProcessScreen> {
         try {
           _setImageProviderContextForContainer(_containerNoOut.text.trim());
           await _refreshUploadedImages();
-          // Apply any cached form values for this container/plate
-          // Prefer combined plate|container key, else fallback to legacy keys
+          // Apply cached form values for this specific Pre-Out record.
           final combined = _buildOutCacheKey();
           if (combined.isNotEmpty && _formCache.getCached(combined, gate: 'OUT') != null) {
             _formCache.setCurrent(combined, gate: 'OUT');
             _applyCachedForm(combined, gate: 'OUT');
-          } else {
-            final plateOnly = _plateNoOut.trim().isNotEmpty ? _plateNoOut.trim() : '';
-            final containerOnly = _containerNoOut.text.trim().isNotEmpty ? _containerNoOut.text.trim() : '';
-            final fallback = plateOnly.isNotEmpty ? plateOnly : containerOnly;
-            if (fallback.isNotEmpty) {
-              _formCache.setCurrent(fallback, gate: 'OUT');
-              _applyCachedForm(fallback, gate: 'OUT');
-            }
           }
         } catch (_) {}
       }
@@ -934,8 +976,6 @@ class _ProcessScreenState extends State<ProcessScreen> {
           }).toList();
         });
 
-        // Show overlay after state is updated
-        _showContainerDropdownOverlay();
       }
     } catch (e) {
       print('DEBUG: Search error: $e');
@@ -969,25 +1009,40 @@ class _ProcessScreenState extends State<ProcessScreen> {
   }
 
   void _handleDateManufacturedChange(String value) {
-    // Remove non-numeric characters
     String cleaned = value.replaceAll(RegExp(r'\D'), '');
 
-    // If cleaned is empty, clear the field
-    if (cleaned.isEmpty) {
-      _dateManufactured.text = '';
-      return;
+    // Accept only month prefixes that can become 01-12.
+    String accepted = '';
+    if (cleaned.isNotEmpty && (cleaned[0] == '0' || cleaned[0] == '1')) {
+      accepted = cleaned[0];
+    }
+    if (cleaned.length >= 2 && accepted.length == 1) {
+      final month = int.tryParse(cleaned.substring(0, 2));
+      if (month != null && month >= 1 && month <= 12) {
+        accepted = cleaned.substring(0, 2);
+      }
     }
 
-    // If length > 6, keep only first 6 digits
-    if (cleaned.length > 6) cleaned = cleaned.substring(0, 6);
-
-    // Format as mm/yyyy
-    String formatted = '';
-    if (cleaned.length <= 2) {
-      formatted = cleaned;
-    } else if (cleaned.length <= 6) {
-      formatted = '${cleaned.substring(0, 2)}/${cleaned.substring(2)}';
+    // After the month, accept only year prefixes that can become a year from
+    // 1900 through the current year. This prevents invalid digits while still
+    // allowing the user to enter a partial year.
+    if (accepted.length == 2 && cleaned.length > 2) {
+      final yearEnd = cleaned.length > 6 ? 6 : cleaned.length;
+      final yearDigits = cleaned.substring(2, yearEnd);
+      for (var length = 1; length <= yearDigits.length; length++) {
+        final prefix = yearDigits.substring(0, length);
+        final canBecomeValidYear = List.generate(
+          DateTime.now().year - 1900 + 1,
+          (index) => (1900 + index).toString(),
+        ).any((year) => year.startsWith(prefix));
+        if (!canBecomeValidYear) break;
+        accepted += prefix.substring(prefix.length - 1);
+      }
     }
+
+    final formatted = accepted.length <= 2
+        ? accepted
+        : '${accepted.substring(0, 2)}/${accepted.substring(2)}';
 
     // Only update if different from current
     if (_dateManufactured.text != formatted) {
@@ -1002,6 +1057,15 @@ class _ProcessScreenState extends State<ProcessScreen> {
 
   /// Convert MM/YYYY format to YYYY-MM-01 format (first day of month)
   /// Input: "02/2025" → Output: "2025-02-01"
+  bool _isValidManufacturedDate(String value) {
+    final match = RegExp(r'^(0[1-9]|1[0-2])/(\d{4})$').firstMatch(value);
+    if (match == null) return false;
+
+    final year = int.parse(match.group(2)!);
+    final currentYear = DateTime.now().year;
+    return year >= 1900 && year <= currentYear;
+  }
+
   String _convertDateManufacturedToDb(String mmYyyyFormat) {
     final parts = mmYyyyFormat.split('/');
     if (parts.length != 2) return '';
@@ -1058,6 +1122,7 @@ class _ProcessScreenState extends State<ProcessScreen> {
     _searchDebounce?.cancel();
     _dropdownOverlay?.remove();
     _uploadSubscription?.cancel();
+    _imageProvider.removeListener(_handleSubmitFieldChanged);
     _formScrollController.dispose();
     _galleryScrollController.dispose();
     _containerNoIn.dispose();
@@ -1075,7 +1140,10 @@ class _ProcessScreenState extends State<ProcessScreen> {
     _dropdownOverlay?.remove();
     _dropdownOverlay = null;
     if (mounted) {
-      setState(() => _showContainerDropdown = false);
+      setState(() {
+        _showContainerDropdown = false;
+        _containerSearchResults = [];
+      });
     }
   }
 
@@ -1139,6 +1207,9 @@ class _ProcessScreenState extends State<ProcessScreen> {
   }
 
   void _handleContainerSearchChange(String value) {
+    _setUppercaseValue(_containerNoOut, value);
+    value = value.toUpperCase();
+
     // Debounce the search - only trigger after 3+ characters
     _searchDebounce?.cancel();
     _selectedContainerId = null;
@@ -1149,17 +1220,43 @@ class _ProcessScreenState extends State<ProcessScreen> {
     }
     if (value.length >= 3) {
       _searchDebounce = Timer(const Duration(milliseconds: 500), () {
-        _searchContainers(value);
+        _searchContainers(value.toUpperCase());
       });
     } else {
       _hideContainerDropdown();
     }
   }
 
+  void _handleRemarksOutChange(String value) {
+    _setUppercaseValue(_remarksOut, value);
+  }
+
+  void _handleIsoCodeInChange(String value) {
+    _setUppercaseValue(_isoCodeIn, value);
+    if (!_applyingCache) _saveCache();
+  }
+
+  void _handleRemarksInChange(String value) {
+    _setUppercaseValue(_remarksIn, value);
+    if (!_applyingCache) _saveCache();
+  }
+
+  void _setUppercaseValue(TextEditingController controller, String value) {
+    final uppercase = value.toUpperCase();
+    if (value == uppercase) return;
+
+    final selection = controller.selection;
+    controller.value = controller.value.copyWith(
+      text: uppercase,
+      selection: selection,
+      composing: TextRange.empty,
+    );
+  }
+
   void _selectContainer(ContainerSearchResult container) {
     _hideContainerDropdown();
 
-    // Keep OUT cache key stable per opened pre-out plate. Use combined plate|container.
+    // Keep the OUT cache key stable for this plate/hauler/date-added record.
     if (_outCacheKey.isEmpty) {
       _outCacheKey = _buildOutCacheKey();
     }
@@ -1282,7 +1379,10 @@ class _ProcessScreenState extends State<ProcessScreen> {
       final imageCacheKey = _buildImageCacheKey(containerNo);
       await Navigator.of(context).push(
         MaterialPageRoute(
-          builder: (context) => ContinuousCameraScreen(maxImages: 100, containerNo: imageCacheKey),
+          builder: (context) => ContinuousCameraScreen(
+            maxImages: _maxTotalImages,
+            containerNo: imageCacheKey,
+          ),
         ),
       );
       // Images are stored in provider, no need to return them
@@ -1298,8 +1398,13 @@ class _ProcessScreenState extends State<ProcessScreen> {
     }
   }
 
+  int get _remainingImageCapacity {
+    final remaining = _maxTotalImages - _imageProvider.uploadedImages.length;
+    return remaining < 0 ? 0 : remaining;
+  }
+
   Future<void> _uploadImages() async {
-    // If there are no images, do nothing (images are optional)
+    // Existing uploaded images do not need to be uploaded again.
     if (_imageProvider.images.isEmpty) {
       return;
     }
@@ -1307,11 +1412,7 @@ class _ProcessScreenState extends State<ProcessScreen> {
     String containerNo =
         _isOut ? _containerNoOut.text.trim() : _containerNoIn.text.trim();
     if (containerNo.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('Container number is required to upload images')),
-      );
-      return;
+      throw Exception('Container number is required to upload images');
     }
 
     setState(() {
@@ -1321,9 +1422,6 @@ class _ProcessScreenState extends State<ProcessScreen> {
     });
 
     try {
-      // Show 5-second upload feedback
-      await Future.delayed(const Duration(seconds: 5));
-
       // Prepare date and upload path for server-side organization
       final now = DateTime.now();
       final dateStr = "${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}-${now.year}";
@@ -1340,9 +1438,9 @@ class _ProcessScreenState extends State<ProcessScreen> {
         uploadPath: uploadPath,
       );
 
-      // Start upload in background but keep gallery visible and cached per-container
+      // Wait for the complete server upload before saving anything locally.
       final _user = context.read<AuthProvider>().user;
-      _imageUploadService.uploadContainerPictures(
+      final result = await _imageUploadService.uploadContainerPictures(
         containerNo: containerNo,
         gateStatus: _isOut ? 'out' : 'in',
         images: imagesToUpload,
@@ -1354,89 +1452,54 @@ class _ProcessScreenState extends State<ProcessScreen> {
         onProgress: (p) {
           if (mounted) setState(() => _uploadProgress = p);
         },
-      ).then((result) async {
-        // Always process cache update even if the screen is no longer mounted
-        try {
-          final success = result['success'] == true;
-          if (success) {
-            final appDir = await getApplicationDocumentsDirectory();
-            final localCacheFolderName = _isOut ? '${containerNo}_${_plateNoOut.trim()}' : containerNo;
-            final localDirPath = p.join(appDir.path, uploadPath, localCacheFolderName);
-            final localDir = Directory(localDirPath);
-            if (!localDir.existsSync()) localDir.createSync(recursive: true);
+      );
 
-            int idx = lastIndex;
-            final List<File> movedFiles = [];
-            for (final f in imagesToUpload) {
-              idx += 1;
-              final newName = '$containerNo($idx).jpg';
-              final dest = File(p.join(localDir.path, newName));
-              try {
-                final copied = await f.copy(dest.path);
-                movedFiles.add(copied);
-              } catch (_) {
-                try {
-                  final renamed = await f.rename(dest.path);
-                  movedFiles.add(renamed);
-                } catch (_) {}
-              }
-            }
-
-              if (movedFiles.isNotEmpty) {
-                await _saveUploadedImagesToPhoneStorage(movedFiles);
-              } else {
-                await _saveUploadedImagesToPhoneStorage(imagesToUpload);
-              }
-
-              for (final f in imagesToUpload) {
-                _imageProvider.removeImageByFile(f);
-              }
-
-              // Refresh from server so uploaded gallery only shows server images
-              try {
-                await _refreshUploadedImages();
-              } catch (_) {}
-          }
-        } catch (_) {
-          for (final f in imagesToUpload) {
-            _imageProvider.removeImageByFile(f);
-          }
-          try {
-            await _refreshUploadedImages();
-          } catch (_) {}
-        }
-
-        // UI feedback if still mounted (upload stream also shows a SnackBar)
-        if (mounted) {
-          setState(() {});
-        }
-      }).catchError((e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Upload error: $e')),
-          );
-        }
-      });
-
-      if (mounted) {
-        // Keep buttons disabled until upload completes; just show an informational message
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Images uploading in background'),
-            duration: Duration(seconds: 3),
-          ),
-        );
+      if (result['success'] != true) {
+        throw Exception(result['message']?.toString() ?? 'Image upload failed');
       }
+
+      // Save every successfully uploaded image to phone storage.
+      final appDir = await getApplicationDocumentsDirectory();
+      final localCacheFolderName =
+          _isOut ? '${containerNo}_${_plateNoOut.trim()}' : containerNo;
+      final localDirPath = p.join(appDir.path, uploadPath, localCacheFolderName);
+      final localDir = Directory(localDirPath);
+      if (!localDir.existsSync()) await localDir.create(recursive: true);
+
+      final destinations = <File>[];
+      for (var i = 0; i < imagesToUpload.length; i++) {
+        destinations.add(File(p.join(
+          localDir.path,
+          '$containerNo(${lastIndex + i + 1}).jpg',
+        )));
+      }
+
+      // These files are independent, so copy them concurrently while still
+      // awaiting every result before continuing.
+      final savedFiles = await Future.wait(
+        List.generate(imagesToUpload.length, (i) async {
+          try {
+            return await imagesToUpload[i].copy(destinations[i].path);
+          } catch (_) {
+            return await imagesToUpload[i].rename(destinations[i].path);
+          }
+        }),
+      );
+
+      await _saveUploadedImagesToPhoneStorage(savedFiles);
+
+      for (final f in imagesToUpload) {
+        _imageProvider.removeImageByFile(f);
+      }
+
     } catch (e) {
+      rethrow;
+    } finally {
       if (mounted) {
         setState(() {
           _uploadingImages = false;
           _showUploadProgress = false;
         });
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Upload error: ${e.toString()}')),
-        );
       }
     }
   }
@@ -1444,13 +1507,12 @@ class _ProcessScreenState extends State<ProcessScreen> {
   Future<void> _saveUploadedImagesToPhoneStorage(List<File> files) async {
     if (files.isEmpty) return;
 
-    for (final file in files) {
-      try {
-        await ImageGallerySaverPlus.saveFile(file.path);
-      } catch (_) {
-        // Ignore per-file gallery save errors and continue with others.
+    await Future.wait(files.map((file) async {
+      final result = await ImageGallerySaverPlus.saveFile(file.path);
+      if (result is! Map || result['isSuccess'] != true) {
+        throw Exception('Could not save ${p.basename(file.path)} to phone storage');
       }
-    }
+    }));
   }
 
   void _deleteImage(int index) {
@@ -1511,7 +1573,7 @@ class _ProcessScreenState extends State<ProcessScreen> {
               padding: const EdgeInsets.symmetric(vertical: 14),
               foregroundColor: Colors.white,
             ),
-            onPressed: (_submitting || _uploadingImages) ? null : _submit,
+            onPressed: _canSubmit ? _submit : null,
             icon: _submitting || _uploadingImages
                 ? const SizedBox(
                     height: 18,
@@ -1522,7 +1584,9 @@ class _ProcessScreenState extends State<ProcessScreen> {
                     ),
                   )
                 : const Icon(Icons.check_circle_outline),
-            label: Text(_submitting ? 'Submitting...' : (_uploadingImages ? 'Uploading...' : 'Submit')),
+            label: Text(_uploadingImages
+                ? 'Uploading and saving images...'
+                : (_submitting ? 'Submitting...' : 'Submit')),
           ),
         ),
         const SizedBox(height: 12),
@@ -1535,7 +1599,7 @@ class _ProcessScreenState extends State<ProcessScreen> {
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Text(
-                  'Pictures taken: ${_imageProvider.count}/100',
+                  'Pictures taken: ${_imageProvider.count}/$_remainingImageCapacity',
                   style: const TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.w500,
@@ -1546,9 +1610,22 @@ class _ProcessScreenState extends State<ProcessScreen> {
                   TextButton.icon(
                     icon: const Icon(Icons.delete, size: 18),
                     label: const Text('Clear All'),
-                    onPressed: () {
-                      _imageProvider.clearAll();
-                      setState(() {});
+                    onPressed: () async {
+                      final confirmed = await showDialog<bool>(
+                        context: context,
+                        builder: (ctx) => AlertDialog(
+                          title: const Text('Clear all images?'),
+                          content: const Text('This will remove all images from the preview. Continue?'),
+                          actions: [
+                            TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
+                            TextButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Clear', style: TextStyle(color: Colors.red))),
+                          ],
+                        ),
+                      );
+                      if (confirmed == true) {
+                        _imageProvider.clearAll();
+                        if (mounted) setState(() {});
+                      }
                     },
                     style: TextButton.styleFrom(
                       foregroundColor: Colors.red,
@@ -1599,7 +1676,7 @@ class _ProcessScreenState extends State<ProcessScreen> {
                       scrollDirection: Axis.horizontal,
                       itemCount: uploadedImages.length,
                       separatorBuilder: (_, __) => const SizedBox(width: 8),
-                      itemBuilder: (context, index) {
+                        itemBuilder: (context, index) {
                         final file = uploadedImages[index];
                         final imageNumber = _extractUploadedImageNumber(file);
                         final badgeText = imageNumber > 0
@@ -1612,14 +1689,21 @@ class _ProcessScreenState extends State<ProcessScreen> {
                             SizedBox(
                               width: uploadTileWidth,
                               height: uploadTileHeight,
-                              child: Container(
-                                decoration: BoxDecoration(
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(color: Colors.white, width: 2),
-                                ),
-                                child: ClipRRect(
-                                  borderRadius: BorderRadius.circular(8),
-                                  child: Image.file(file, fit: BoxFit.cover),
+                              child: GestureDetector(
+                                onTap: () {
+                                  Navigator.of(context).push(MaterialPageRoute(
+                                    builder: (_) => ImagePreviewViewer(images: uploadedImages, initialIndex: index),
+                                  ));
+                                },
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(color: Colors.white, width: 2),
+                                  ),
+                                  child: ClipRRect(
+                                    borderRadius: BorderRadius.circular(8),
+                                    child: Image.file(file, fit: BoxFit.cover),
+                                  ),
                                 ),
                               ),
                             ),
@@ -1704,19 +1788,27 @@ class _ProcessScreenState extends State<ProcessScreen> {
                             clipBehavior: Clip.none,
                             children: [
                               Positioned.fill(
-                                child: Container(
-                                  decoration: BoxDecoration(
-                                    borderRadius: BorderRadius.circular(8),
-                                    border: Border.all(
-                                      color: Colors.white,
-                                      width: 2,
+                                child: GestureDetector(
+                                  onTap: () {
+                                    final imgs = List<File>.from(_imageProvider.images);
+                                    Navigator.of(context).push(MaterialPageRoute(
+                                      builder: (_) => ImagePreviewViewer(images: imgs, initialIndex: index),
+                                    ));
+                                  },
+                                  child: Container(
+                                    decoration: BoxDecoration(
+                                      borderRadius: BorderRadius.circular(8),
+                                      border: Border.all(
+                                        color: Colors.white,
+                                        width: 2,
+                                      ),
                                     ),
-                                  ),
-                                  child: ClipRRect(
-                                    borderRadius: BorderRadius.circular(8),
-                                    child: Image.file(
-                                      _imageProvider.images[index],
-                                      fit: BoxFit.cover,
+                                    child: ClipRRect(
+                                      borderRadius: BorderRadius.circular(8),
+                                      child: Image.file(
+                                        _imageProvider.images[index],
+                                        fit: BoxFit.cover,
+                                      ),
                                     ),
                                   ),
                                 ),
@@ -1789,6 +1881,28 @@ class _ProcessScreenState extends State<ProcessScreen> {
       return;
     }
 
+    // A gate transaction (IN or OUT) must include at least one picture either
+    // taken now or already uploaded for this container/gate. Re-sync the image
+    // context to the current container first so stale images from another
+    // container can never satisfy this check.
+    final currentContainerNo =
+        (_isOut ? _containerNoOut.text : _containerNoIn.text).trim();
+    if (currentContainerNo.isNotEmpty) {
+      _setImageProviderContextForContainer(currentContainerNo);
+    }
+    final hasTakenImages = currentContainerNo.isNotEmpty &&
+        _imageProvider.images.any((f) => f.existsSync());
+    final hasUploadedImages = currentContainerNo.isNotEmpty &&
+        _imageProvider.uploadedImages.isNotEmpty;
+    if (!hasTakenImages && !hasUploadedImages) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('At least 1 picture (taken or uploaded) is required before submitting'),
+        ),
+      );
+      return;
+    }
+
     // Common validations
     if (_isOut) {
       if (_containerNoOut.text.trim().isEmpty) {
@@ -1847,6 +1961,16 @@ class _ProcessScreenState extends State<ProcessScreen> {
         );
         return;
       }
+      if (!_isValidManufacturedDate(_dateManufactured.text.trim())) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Manufactured date must use a month from 01-12 and a year from 1900-${DateTime.now().year}',
+            ),
+          ),
+        );
+        return;
+      }
       if (_selectedStatusIn == null) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Please select container status')),
@@ -1858,10 +1982,12 @@ class _ProcessScreenState extends State<ProcessScreen> {
     setState(() => _submitting = true);
 
     try {
-      String message;
+      // Complete image upload and phone save before processing the gate record.
+      // Any failure keeps the gate action pending and prevents a success notice.
+      await _uploadImages();
 
       if (_isOut) {
-        message = await _gateService.processGateOut(
+        await _gateService.processGateOut(
           username: user.username,
           payload: {
             'p_id': widget.record.pId,
@@ -1878,14 +2004,9 @@ class _ProcessScreenState extends State<ProcessScreen> {
           },
         );
 
-        // Submission succeeded; clear OUT cache for this pre-out plate/session.
-        // Clear combined key and legacy keys (plate-only, container-only) to avoid stale cache.
+        // Submission succeeded; clear this specific OUT record's cache.
         final combinedKey = _buildOutCacheKey();
-        final plateOnly = _plateNoOut.trim();
-        final containerKey = _containerNoOut.text.trim();
         if (combinedKey.isNotEmpty) await _formCache.clearFor(combinedKey, gate: 'OUT');
-        if (plateOnly.isNotEmpty) await _formCache.clearFor(plateOnly, gate: 'OUT');
-        if (containerKey.isNotEmpty) await _formCache.clearFor(containerKey, gate: 'OUT');
       } else {
         final classValue =
             _selectedClassIn == 1 ? 'A' : (_selectedClassIn == 2 ? 'B' : 'C');
@@ -1894,7 +2015,7 @@ class _ProcessScreenState extends State<ProcessScreen> {
         final dbDateFormat =
             _convertDateManufacturedToDb(_dateManufactured.text.trim());
 
-        message = await _gateService.processGateIn(
+        await _gateService.processGateIn(
           username: user.username,
           payload: {
             'p_id': widget.record.pId,
@@ -1918,36 +2039,17 @@ class _ProcessScreenState extends State<ProcessScreen> {
 
       if (!mounted) return;
 
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(message)));
+      final gateLabel = _isOut ? 'gated out' : 'gated in';
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Successfully $gateLabel')),
+      );
 
       // Add a delay to allow snackbar to be shown before popping
       await Future.delayed(const Duration(milliseconds: 500));
 
       if (!mounted) return;
-      // Stay on the process screen; enable camera after successful submit
-      if (mounted) {
-        setState(() {
-          if (_isOut) {
-            _containerFetched = true;
-          } else {
-            _isoFetched = true;
-          }
-          // Allow camera only after a successful submit
-          _allowCamera = true;
-          _userEdited = false;
-        });
-        _updateCameraEnabled();
-        // For Gate IN, refresh fields from DB after submit/cache-clear so
-        // date manufactured, ISO code, and remarks reflect persisted values.
-        if (!_isOut) {
-          await _loadContainerDetails();
-        }
-        // Start uploading any taken images after successful submit (images optional)
-        _uploadImages();
-        // After successful submit, refresh uploaded images for the (possibly new) container
-        WidgetsBinding.instance.addPostFrameCallback((_) => _refreshUploadedImages());
-      }
+      // The image upload/save and gate request have both completed.
+      Navigator.of(context).pop(true);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1964,12 +2066,19 @@ class _ProcessScreenState extends State<ProcessScreen> {
   }
 
   Widget _buildTextField(String label, TextEditingController controller,
-      {bool enabled = true, int maxLines = 1, String? hint, ValueChanged<String>? onChanged}) {
+      {bool enabled = true,
+      int maxLines = 1,
+      String? hint,
+      ValueChanged<String>? onChanged,
+      List<TextInputFormatter>? inputFormatters,
+      TextCapitalization textCapitalization = TextCapitalization.none}) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: TextField(
         controller: controller,
         onChanged: onChanged,
+        inputFormatters: inputFormatters,
+        textCapitalization: textCapitalization,
         enabled: enabled,
         maxLines: maxLines,
         style: TextStyle(
@@ -2041,6 +2150,27 @@ class _ProcessScreenState extends State<ProcessScreen> {
     );
   }
 
+  Widget _buildFieldLabel(String label, {bool required = false}) {
+    final labelStyle = TextStyle(
+      fontSize: 12,
+      fontWeight: FontWeight.w500,
+      color: Colors.grey[700],
+    );
+
+    return Text.rich(
+      TextSpan(
+        children: [
+          TextSpan(text: label, style: labelStyle),
+          if (required)
+            const TextSpan(
+              text: ' *',
+              style: TextStyle(color: Colors.red),
+            ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final primaryColor = _isOut
@@ -2089,11 +2219,19 @@ class _ProcessScreenState extends State<ProcessScreen> {
                           ),
                         ),
                         const SizedBox(height: 8),
-                        Text(
-                          'Complete all required fields marked with *',
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: Colors.grey[700],
+                        Text.rich(
+                          TextSpan(
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Colors.grey[700],
+                            ),
+                            children: const [
+                              TextSpan(text: 'Complete all required fields marked with '),
+                              TextSpan(
+                                text: '*',
+                                style: TextStyle(color: Colors.red),
+                              ),
+                            ],
                           ),
                         ),
                       ],
@@ -2131,20 +2269,17 @@ class _ProcessScreenState extends State<ProcessScreen> {
                         enabled: false),
                     const SizedBox(height: 16),
                     // GATE OUT FIELDS
-                    Text(
-                      'Container No. *',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.grey[700],
-                      ),
-                    ),
+                    _buildFieldLabel('Container No.', required: true),
                     const SizedBox(height: 4),
                     Container(
                       key: _containerSearchKey,
                       child: TextField(
                         controller: _containerNoOut,
                         onChanged: _handleContainerSearchChange,
+                        textCapitalization: TextCapitalization.characters,
+                        inputFormatters: [
+                          LengthLimitingTextInputFormatter(11),
+                        ],
                         decoration: InputDecoration(
                           hintText: 'Type to search containers...',
                           floatingLabelBehavior: FloatingLabelBehavior.always,
@@ -2158,6 +2293,38 @@ class _ProcessScreenState extends State<ProcessScreen> {
                         ),
                       ),
                     ),
+                    if (_containerSearchResults.isNotEmpty)
+                      Container(
+                        margin: const EdgeInsets.only(top: 4),
+                        constraints: const BoxConstraints(maxHeight: 250),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.grey[300]!),
+                          boxShadow: const [
+                            BoxShadow(
+                              color: Colors.black12,
+                              blurRadius: 4,
+                              offset: Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: ListView.builder(
+                          shrinkWrap: true,
+                          itemCount: _containerSearchResults.length,
+                          itemBuilder: (context, index) {
+                            final container = _containerSearchResults[index];
+                            return ListTile(
+                              dense: true,
+                              title: Text(
+                                container.containerNo,
+                                style: const TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                              onTap: () => _selectContainer(container),
+                            );
+                          },
+                        ),
+                      ),
                     const SizedBox(height: 16),
 
                     // Client (Read-only)
@@ -2236,14 +2403,7 @@ class _ProcessScreenState extends State<ProcessScreen> {
                     const SizedBox(height: 16),
 
                     // Container Status (Editable)
-                    Text(
-                      'Container Status *',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.grey[700],
-                      ),
-                    ),
+                    _buildFieldLabel('Container Status', required: true),
                     const SizedBox(height: 4),
                     _buildDropdown(
                       '',
@@ -2289,26 +2449,18 @@ class _ProcessScreenState extends State<ProcessScreen> {
                     const SizedBox(height: 16),
 
                     // Remarks (Editable)
-                    Text(
-                      'Remarks *',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.grey[700],
-                      ),
-                    ),
+                    _buildFieldLabel('Remarks', required: true),
                     const SizedBox(height: 4),
-                    _buildTextField('', _remarksOut, maxLines: 4),
+                    _buildTextField(
+                      '',
+                      _remarksOut,
+                      maxLines: 4,
+                      onChanged: _handleRemarksOutChange,
+                      textCapitalization: TextCapitalization.characters,
+                    ),
                   ] else ...[
                     // GATE IN FIELDS
-                    Text(
-                      'Container No. *',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.grey[700],
-                      ),
-                    ),
+                    _buildFieldLabel('Container No.', required: true),
                     const SizedBox(height: 4),
                     _buildTextField('', _containerNoIn,
                         enabled: false, hint: 'Auto-filled'),
@@ -2351,21 +2503,54 @@ class _ProcessScreenState extends State<ProcessScreen> {
                       ),
 
                     // Size/Type
-                    Text(
-                      'Size/Type *',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.grey[700],
-                      ),
-                    ),
+                    _buildFieldLabel('Size/Type', required: true),
                     const SizedBox(height: 4),
                     _buildDropdown(
                       '',
                       _selectedSizeTypeIn,
                       _sizeTypeOptions,
                       (value) {
-                        setState(() => _selectedSizeTypeIn = value);
+                        setState(() {
+                          _selectedSizeTypeIn = value;
+                          if (value != null) {
+                            final item = _sizeTypeOptions.firstWhere(
+                                (opt) => opt.id == value,
+                                orElse: () => LookupItem(id: 0, label: '', extra: ''));
+
+                            // Hard-coded legacy mapping from Size/Type label -> ISO
+                            const Map<String, String> legacySizeToIso = {
+                              '20DC': '22G1',
+                              '20FR': '22P1',
+                              '20OT': '22U1',
+                              '20RF': '22R1',
+                              '20RH': '25R1',
+                              '40DC': '42G1',
+                              '40FR': '42P1',
+                              '40HC': '45G1',
+                              '40OT': '42U1',
+                              '40RH': '45R1',
+                              '45HC': 'L5G1',
+                            };
+
+                            String isoValue = '';
+                            if (item.label.isNotEmpty) {
+                              // Prefer exact mapping by label (e.g., '20DC')
+                              isoValue = legacySizeToIso[item.label] ?? '';
+                            }
+
+                            // If mapping not found, fall back to parsing label after '-' or use full label
+                            if (isoValue.isEmpty && item.label.isNotEmpty) {
+                              if (item.label.contains('-')) {
+                                final parts = item.label.split('-');
+                                isoValue = parts.isNotEmpty ? parts.last : item.label;
+                              } else {
+                                isoValue = item.label;
+                              }
+                            }
+
+                            if (isoValue.isNotEmpty) _isoCodeIn.text = isoValue;
+                          }
+                        });
                         _saveCache();
                       },
                       hintText: 'Select Size/Type',
@@ -2373,32 +2558,24 @@ class _ProcessScreenState extends State<ProcessScreen> {
                     const SizedBox(height: 16),
 
                     // ISO Code
-                    Text(
-                      'ISO Code *',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.grey[700],
-                      ),
-                    ),
+                    _buildFieldLabel('ISO Code', required: true),
                     const SizedBox(height: 4),
-                    _buildTextField('', _isoCodeIn, onChanged: (v) => !_applyingCache ? _saveCache() : null),
+                    _buildTextField(
+                      '',
+                      _isoCodeIn,
+                      onChanged: _handleIsoCodeInChange,
+                      textCapitalization: TextCapitalization.characters,
+                    ),
                     const SizedBox(height: 16),
 
                     // Manufactured Date
-                    Text(
-                      'Manufactured Date *',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.grey[700],
-                      ),
-                    ),
+                    _buildFieldLabel('Manufactured Date', required: true),
                     const SizedBox(height: 4),
                     Padding(
                       padding: const EdgeInsets.only(bottom: 12),
                       child: TextField(
                         controller: _dateManufactured,
+                        keyboardType: TextInputType.number,
                         onChanged: _handleDateManufacturedChange,
                         decoration: InputDecoration(
                           hintText: 'mm/yyyy',
@@ -2420,14 +2597,7 @@ class _ProcessScreenState extends State<ProcessScreen> {
                     const SizedBox(height: 16),
 
                     // Class
-                    Text(
-                      'Class *',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.grey[700],
-                      ),
-                    ),
+                    _buildFieldLabel('Class', required: true),
                     const SizedBox(height: 4),
                     _buildDropdown(
                       '',
@@ -2441,14 +2611,7 @@ class _ProcessScreenState extends State<ProcessScreen> {
                     ),
 
                     // Container Status
-                    Text(
-                      'Container Status *',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.grey[700],
-                      ),
-                    ),
+                    _buildFieldLabel('Container Status', required: true),
                     const SizedBox(height: 4),
                     _buildDropdown(
                       '',
@@ -2463,16 +2626,15 @@ class _ProcessScreenState extends State<ProcessScreen> {
                     const SizedBox(height: 16),
 
                     // Remarks
-                    Text(
-                      'Remarks',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.grey[700],
-                      ),
-                    ),
+                    _buildFieldLabel('Remarks', required: true),
                     const SizedBox(height: 4),
-                    _buildTextField('', _remarksIn, maxLines: 4, onChanged: (v) => !_applyingCache ? _saveCache() : null),
+                    _buildTextField(
+                      '',
+                      _remarksIn,
+                      maxLines: 4,
+                      onChanged: _handleRemarksInChange,
+                      textCapitalization: TextCapitalization.characters,
+                    ),
                   ],
 
                   const SizedBox(height: 24),
