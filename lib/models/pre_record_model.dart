@@ -8,6 +8,7 @@ class PreRecord {
   final int? clientId;
   final int? runtime;
   final String dateAdded;
+  final String dateCompleted;
 
   const PreRecord({
     required this.pId,
@@ -19,6 +20,7 @@ class PreRecord {
     required this.clientId,
     required this.runtime,
     required this.dateAdded,
+    required this.dateCompleted,
   });
 
   factory PreRecord.fromJson(Map<String, dynamic> json) {
@@ -32,6 +34,7 @@ class PreRecord {
       clientId: (json['client_id'] as num?)?.toInt(),
       runtime: (json['runtime'] as num?)?.toInt(),
       dateAdded: (json['date_added'] ?? '').toString(),
+      dateCompleted: (json['date_completed'] ?? '').toString(),
     );
   }
 }
