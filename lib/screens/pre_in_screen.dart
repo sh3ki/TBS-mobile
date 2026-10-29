@@ -273,6 +273,13 @@ class _PreInScreenState extends State<PreInScreen> {
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
+                  if (r.dateCompleted.trim().isNotEmpty &&
+                      r.dateCompleted.trim().toLowerCase() != 'null')
+                    const Icon(
+                      Icons.check_circle,
+                      color: Colors.white,
+                      size: 24,
+                    ),
                 ],
               ),
             ),
