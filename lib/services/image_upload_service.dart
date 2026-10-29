@@ -119,7 +119,23 @@ class ImageUploadService {
             )
             .timeout(const Duration(seconds: 300));
 
-        if (response.statusCode == 200) {
+        if (response.statusCode == 200 &&
+            response.data is Map &&
+            response.data['success'] == false) {
+          final message = response.data['message']?.toString() ??
+              'Server rejected the image upload';
+          _uploading[containerNo] = false;
+          final progressVal = (uploadedCount / totalImages).clamp(0.0, 1.0);
+          _progress[containerNo] = progressVal;
+          _uploadController.add(UploadStatus(
+            containerNo: containerNo,
+            progress: progressVal,
+            completed: true,
+            success: false,
+            message: message,
+          ));
+          return {'success': false, 'message': message, 'data': response.data};
+        } else if (response.statusCode == 200) {
           uploadedCount += batch.length;
           // continue to next batch
         } else {
