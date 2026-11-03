@@ -2,10 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/auth_provider.dart';
+import '../services/app_update_service.dart';
 import '../services/credentials_service.dart';
 import '../utils/error_handler.dart';
 import '../widgets/tbs_logo.dart';
-import '../constants/app_info.dart';
 import 'menu_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -23,6 +23,7 @@ class _LoginScreenState extends State<LoginScreen> with WidgetsBindingObserver {
   bool _credentialsLoaded = false;
   List<SavedCredential> _savedAccounts = [];
   SavedCredential? _selectedAccount;
+  late final Future<String> _installedVersionFuture;
 
   @override
   void initState() {
@@ -30,6 +31,7 @@ class _LoginScreenState extends State<LoginScreen> with WidgetsBindingObserver {
     print('[LoginScreen] initState called - loading saved credentials');
     WidgetsBinding.instance.addObserver(this);
     _credentialsLoaded = false;
+    _installedVersionFuture = AppUpdateService.getInstalledVersion();
     _loadSavedCredentials();
   }
 
@@ -207,10 +209,10 @@ class _LoginScreenState extends State<LoginScreen> with WidgetsBindingObserver {
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 8),
-                const Row(
+                Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Text(
+                    const Text(
                       'Gate Management System',
                       style: TextStyle(
                         fontSize: 14,
@@ -219,12 +221,17 @@ class _LoginScreenState extends State<LoginScreen> with WidgetsBindingObserver {
                       ),
                     ),
                     SizedBox(width: 8),
-                    Text(
-                      'v$appVersion',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.white70,
+                    FutureBuilder<String>(
+                      future: _installedVersionFuture,
+                      builder: (context, snapshot) => Text(
+                        snapshot.hasData && snapshot.data!.isNotEmpty
+                            ? 'v${snapshot.data}'
+                            : 'Version unavailable',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                          color: Colors.white70,
+                        ),
                       ),
                     ),
                   ],
