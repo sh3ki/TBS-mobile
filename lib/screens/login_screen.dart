@@ -197,7 +197,10 @@ class _LoginScreenState extends State<LoginScreen> with WidgetsBindingObserver {
             child: Column(
               children: [
                 SizedBox(height: size.height * 0.08),
-                const TbsLogo(width: 240),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: const TbsLogo(width: 240),
+                ),
                 const SizedBox(height: 12),
                 const Text(
                   'TBS CONTAINER YARD',
