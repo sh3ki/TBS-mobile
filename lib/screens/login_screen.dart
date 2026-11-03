@@ -206,25 +206,28 @@ class _LoginScreenState extends State<LoginScreen> with WidgetsBindingObserver {
                   ),
                   textAlign: TextAlign.center,
                 ),
-                const SizedBox(height: 4),
-                const Text(
-                  'v$appVersion',
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                    color: Colors.white70,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
                 const SizedBox(height: 8),
-                const Text(
-                  'Gate Management System',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w400,
-                    color: Colors.white70,
-                  ),
-                  textAlign: TextAlign.center,
+                const Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      'Gate Management System',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w400,
+                        color: Colors.white70,
+                      ),
+                    ),
+                    SizedBox(width: 8),
+                    Text(
+                      'v$appVersion',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: Colors.white70,
+                      ),
+                    ),
+                  ],
                 ),
                 SizedBox(height: size.height * 0.08),
                 Container(
