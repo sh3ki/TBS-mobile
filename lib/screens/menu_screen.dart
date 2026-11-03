@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 
+import '../constants/app_info.dart';
 import '../providers/auth_provider.dart';
 import 'login_screen.dart';
 import 'pre_in_screen.dart';
@@ -127,6 +128,21 @@ class _MenuScreenState extends State<MenuScreen> with WidgetsBindingObserver {
             color: Colors.white,
           ),
         ),
+        actions: const [
+          Padding(
+            padding: EdgeInsets.only(right: 16),
+            child: Center(
+              child: Text(
+                'v$appVersion',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                  color: Colors.white70,
+                ),
+              ),
+            ),
+          ),
+        ],
         centerTitle: false,
       ),
       body: Container(
