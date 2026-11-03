@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-import '../constants/app_info.dart';
 import '../providers/auth_provider.dart';
+import '../services/app_update_service.dart';
 import 'login_screen.dart';
 import 'pre_in_screen.dart';
 import 'pre_out_screen.dart';
@@ -19,11 +19,17 @@ class MenuScreen extends StatefulWidget {
 class _MenuScreenState extends State<MenuScreen> with WidgetsBindingObserver {
   bool _needsPermissions = false;
   Map<Permission, PermissionStatus> _statuses = {};
+  late final Future<String> _installedVersionFuture;
+  AppUpdateInfo? _deferredUpdate;
+  bool _updateDownloading = false;
+  double _updateProgress = 0;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _installedVersionFuture = AppUpdateService.getInstalledVersion();
+    _deferredUpdate = AppUpdateService.deferredUpdate;
     _checkPermissions();
   }
 
@@ -110,6 +116,34 @@ class _MenuScreenState extends State<MenuScreen> with WidgetsBindingObserver {
     _checkPermissions();
   }
 
+  Future<void> _installDeferredUpdate() async {
+    final update = _deferredUpdate;
+    if (update == null) return;
+
+    setState(() {
+      _updateDownloading = true;
+      _updateProgress = 0;
+    });
+
+    try {
+      await AppUpdateService().downloadAndInstall(
+        update.apkUrl,
+        onProgress: (received, total) {
+          if (total > 0 && mounted) {
+            setState(() => _updateProgress = received / total);
+          }
+        },
+      );
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _updateDownloading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Unable to download or open the update.')),
+      );
+      print('[MenuScreen] App update failed: $error');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final auth = context.watch<AuthProvider>();
@@ -128,16 +162,21 @@ class _MenuScreenState extends State<MenuScreen> with WidgetsBindingObserver {
             color: Colors.white,
           ),
         ),
-        actions: const [
+        actions: [
           Padding(
-            padding: EdgeInsets.only(right: 16),
+            padding: const EdgeInsets.only(right: 16),
             child: Center(
-              child: Text(
-                'v$appVersion',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w500,
-                  color: Colors.white70,
+              child: FutureBuilder<String>(
+                future: _installedVersionFuture,
+                builder: (context, snapshot) => Text(
+                  snapshot.hasData && snapshot.data!.isNotEmpty
+                      ? 'v${snapshot.data}'
+                      : 'Version unavailable',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: Colors.white70,
+                  ),
                 ),
               ),
             ),
@@ -313,6 +352,54 @@ class _MenuScreenState extends State<MenuScreen> with WidgetsBindingObserver {
                         );
                       },
                     ),
+                    if (_deferredUpdate != null) ...[
+                      const SizedBox(height: 16),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.shade50,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.orange.shade300),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'App update available',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF31393C),
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Version ${_deferredUpdate!.latestVersion} is ready to install.',
+                              style: TextStyle(color: Colors.grey[700]),
+                            ),
+                            if (_updateDownloading) ...[
+                              const SizedBox(height: 12),
+                              LinearProgressIndicator(value: _updateProgress == 0 ? null : _updateProgress),
+                              const SizedBox(height: 6),
+                              Text('${(_updateProgress * 100).round()}% downloaded'),
+                            ],
+                            const SizedBox(height: 12),
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: ElevatedButton(
+                                onPressed: _updateDownloading ? null : _installDeferredUpdate,
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.red,
+                                  foregroundColor: Colors.white,
+                                ),
+                                child: Text(_updateDownloading ? 'Downloading...' : 'Update'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
