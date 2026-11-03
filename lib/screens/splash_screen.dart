@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../providers/auth_provider.dart';
+import '../services/app_update_service.dart';
 import '../widgets/tbs_logo.dart';
 import 'login_screen.dart';
 import 'menu_screen.dart';
@@ -23,15 +24,113 @@ class _SplashScreenState extends State<SplashScreen> {
   Future<void> _bootstrap() async {
     final auth = context.read<AuthProvider>();
     await auth.restoreSession();
+    final updateInfo = await AppUpdateService().checkForUpdate();
     await Future<void>.delayed(const Duration(milliseconds: 1200));
     if (!mounted) {
       return;
     }
+
+    if (updateInfo?.shouldUpdate == true) {
+      await _showUpdateDialog(updateInfo!);
+    }
+
+    if (!mounted) {
+      return;
+    }
+
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
         builder: (_) =>
             auth.isLoggedIn ? const MenuScreen() : const LoginScreen(),
       ),
+    );
+  }
+
+  Future<void> _showUpdateDialog(AppUpdateInfo updateInfo) async {
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        var downloading = false;
+        var progress = 0.0;
+        String? errorMessage;
+
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            Future<void> installUpdate() async {
+              setDialogState(() {
+                downloading = true;
+                errorMessage = null;
+              });
+
+              try {
+                await AppUpdateService().downloadAndInstall(
+                  updateInfo.apkUrl,
+                  onProgress: (received, total) {
+                    if (total > 0) {
+                      setDialogState(() => progress = received / total);
+                    }
+                  },
+                );
+                if (dialogContext.mounted) {
+                  Navigator.of(dialogContext).pop();
+                }
+              } catch (error) {
+                setDialogState(() {
+                  downloading = false;
+                  errorMessage = error.toString().contains('UNKNOWN_SOURCES_PERMISSION_REQUIRED')
+                      ? 'Allow this app to install unknown apps in Settings, then try again.'
+                      : 'Unable to download or open the update.';
+                });
+                print('[SplashScreen] App update failed: $error');
+              }
+            }
+
+            return AlertDialog(
+              title: const Text('Update available'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('A newer version (${updateInfo.latestVersion}) is available.'),
+                  const SizedBox(height: 12),
+                  if (downloading) ...[
+                    LinearProgressIndicator(value: progress == 0 ? null : progress),
+                    const SizedBox(height: 8),
+                    Text('${(progress * 100).round()}% downloaded'),
+                  ],
+                  if (errorMessage != null) ...[
+                    const SizedBox(height: 8),
+                    Text(errorMessage!, style: const TextStyle(color: Colors.red)),
+                  ],
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: downloading
+                      ? null
+                      : () {
+                          AppUpdateService.deferUpdate(updateInfo);
+                          Navigator.of(dialogContext).pop();
+                        },
+                  style: TextButton.styleFrom(
+                    foregroundColor: Colors.black,
+                  ),
+                  child: const Text('Later'),
+                ),
+                ElevatedButton(
+                  onPressed: downloading ? null : installUpdate,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.red,
+                    foregroundColor: Colors.white,
+                  ),
+                  child: Text(downloading ? 'Downloading...' : 'Update'),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 
