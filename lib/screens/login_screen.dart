@@ -5,6 +5,7 @@ import '../providers/auth_provider.dart';
 import '../services/credentials_service.dart';
 import '../utils/error_handler.dart';
 import '../widgets/tbs_logo.dart';
+import '../constants/app_info.dart';
 import 'menu_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -202,6 +203,16 @@ class _LoginScreenState extends State<LoginScreen> with WidgetsBindingObserver {
                     fontSize: 22,
                     fontWeight: FontWeight.w700,
                     color: Colors.white,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'v$appVersion',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                    color: Colors.white70,
                   ),
                   textAlign: TextAlign.center,
                 ),
