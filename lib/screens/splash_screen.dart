@@ -15,9 +15,12 @@ class SplashScreen extends StatefulWidget {
 }
 
 class _SplashScreenState extends State<SplashScreen> {
+  late final Future<String> _installedVersionFuture;
+
   @override
   void initState() {
     super.initState();
+    _installedVersionFuture = AppUpdateService.getInstalledVersion();
     Future.microtask(_bootstrap);
   }
 
@@ -177,14 +180,33 @@ class _SplashScreenState extends State<SplashScreen> {
                 ),
               ),
               const SizedBox(height: 8),
-              const Text(
-                'CONTAINER YARD MANAGEMENT',
-                style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w400,
-                  color: Colors.white70,
-                  letterSpacing: 0.5,
-                ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Text(
+                    'CONTAINER YARD MANAGEMENT',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w400,
+                      color: Colors.white70,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  FutureBuilder<String>(
+                    future: _installedVersionFuture,
+                    builder: (context, snapshot) => Text(
+                      snapshot.hasData && snapshot.data!.isNotEmpty
+                          ? 'v${snapshot.data}'
+                          : 'Version unavailable',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: Colors.white70,
+                      ),
+                    ),
+                  ),
+                ],
               ),
               const SizedBox(height: 40),
               SizedBox(
