@@ -21,6 +21,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
   bool _loading = false;
   List<Map<String, dynamic>> _records = [];
   bool _isListView = false;
+  final Set<String> _expandedInventoryRows = <String>{};
 
   @override
   void initState() {
@@ -233,11 +234,14 @@ class _InventoryScreenState extends State<InventoryScreen> {
     final sizeType = (r['size_type'] ?? r['size'] ?? r['size_type_label'] ?? '').toString();
     final iso = (r['iso_code'] ?? '').toString();
     final clas = (r['condition'] ?? r['class'] ?? '').toString();
+    final location = (r['location'] ?? '').toString();
+    final days = (r['days'] ?? '').toString();
     final status = (r['container_status'] ?? r['status'] ?? '').toString();
     final approval = (r['approval_notes'] ?? r['approval'] ?? r['app_notes'] ?? '').toString();
     final gateRemarks = (r['remarks'] ?? r['gate_remarks'] ?? r['eir_notes'] ?? '').toString();
     final remarks = (r['remarks'] ?? r['eir_notes'] ?? '').toString();
     final holdNotes = (r['hold_notes'] ?? r['hold_note'] ?? r['hold'] ?? r['hold_notes_text'] ?? r['hold_reason'] ?? r['hold_notes_display'] ?? '').toString();
+    final isHold = r['is_hold'] == true || r['is_hold'].toString() == '1';
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -281,6 +285,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),
+                if (isHold)
+                  const Icon(Icons.lock, color: Colors.white, size: 18),
               ],
             ),
           ),
@@ -295,7 +301,11 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 const SizedBox(height: 8),
                 _infoRow(Icons.qr_code, 'ISO Code', iso),
                 const SizedBox(height: 8),
+                _infoRow(Icons.calendar_today, 'Days', days),
+                const SizedBox(height: 8),
                 _infoRow(Icons.category, 'Class', clas),
+                const SizedBox(height: 8),
+                _infoRow(Icons.location_on, 'Location', location),
                 const SizedBox(height: 8),
                 _infoRow(Icons.info_outline, 'Container Status', status),
                 const SizedBox(height: 8),
@@ -317,8 +327,19 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
   Widget _buildInventoryListRow(Map<String, dynamic> r) {
     final containerNo = (r['container_no'] ?? r['containerNo'] ?? '').toString();
+    final client = (r['client_name'] ?? r['client'] ?? '').toString();
+    final sizeType = (r['size_type'] ?? r['size'] ?? r['size_type_label'] ?? '').toString();
+    final iso = (r['iso_code'] ?? '').toString();
+    final clas = (r['condition'] ?? r['class'] ?? '').toString();
+    final location = (r['location'] ?? '').toString();
+    final days = (r['days'] ?? '').toString();
     final status = (r['container_status'] ?? r['status'] ?? '').toString();
+    final approval = (r['approval_notes'] ?? r['approval'] ?? r['app_notes'] ?? '').toString();
+    final remarks = (r['remarks'] ?? r['eir_notes'] ?? '').toString();
     final holdNotes = (r['hold_notes'] ?? r['hold_note'] ?? r['hold'] ?? r['hold_notes_text'] ?? r['hold_reason'] ?? r['hold_notes_display'] ?? '').toString();
+    final isHold = r['is_hold'] == true || r['is_hold'].toString() == '1';
+    final rowKey = (r['i_id'] ?? containerNo).toString();
+    final isExpanded = _expandedInventoryRows.contains(rowKey);
     const Color primaryColor = Color(0xFF3E9AF4);
 
     return Container(
@@ -340,7 +361,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
         children: [
           Container(
             width: double.infinity,
-            padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
               color: primaryColor,
               borderRadius: const BorderRadius.only(
@@ -348,54 +368,84 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 topRight: Radius.circular(12),
               ),
             ),
-            child: Row(
-              children: [
-                const Icon(Icons.inventory_2, color: Colors.white, size: 20),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    containerNo.isEmpty ? 'N/A' : containerNo,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                if (holdNotes.isNotEmpty) ...[
-                  IconButton(
-                    onPressed: () {
-                      showDialog(
-                        context: context,
-                        builder: (_) => AlertDialog(
-                          title: const Text('Hold notes'),
-                          content: Text(holdNotes),
-                          actions: [
-                            TextButton(
-                              onPressed: () => Navigator.of(context).pop(),
-                              child: const Text('Close'),
-                            ),
-                          ],
+            child: InkWell(
+              onTap: () => setState(() {
+                if (isExpanded) {
+                  _expandedInventoryRows.remove(rowKey);
+                } else {
+                  _expandedInventoryRows.add(rowKey);
+                }
+              }),
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Row(
+                  children: [
+                    const Icon(Icons.inventory_2, color: Colors.white, size: 20),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        containerNo.isEmpty ? 'N/A' : containerNo,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
                         ),
-                      );
-                    },
-                    icon: const Icon(Icons.lock, color: Colors.white, size: 18),
-                    tooltip: 'Hold notes',
-                  ),
-                ],
-                Text(
-                  status.isEmpty ? '-' : status,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                  ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    if (isHold)
+                      const Padding(
+                        padding: EdgeInsets.only(right: 8),
+                        child: Icon(Icons.lock, color: Colors.white, size: 18),
+                      ),
+                    Text(
+                      status.isEmpty ? '-' : status,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Icon(
+                      isExpanded ? Icons.expand_less : Icons.expand_more,
+                      color: Colors.white,
+                    ),
+                  ],
                 ),
-              ],
+              ),
             ),
           ),
+          if (isExpanded)
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _infoRow(Icons.person, 'Client', client),
+                  const SizedBox(height: 8),
+                  _infoRow(Icons.straighten, 'Size/Type', sizeType),
+                  const SizedBox(height: 8),
+                  _infoRow(Icons.qr_code, 'ISO Code', iso),
+                  const SizedBox(height: 8),
+                  _infoRow(Icons.calendar_today, 'Days', days),
+                  const SizedBox(height: 8),
+                  _infoRow(Icons.category, 'Class', clas),
+                  const SizedBox(height: 8),
+                  _infoRow(Icons.location_on, 'Location', location),
+                  const SizedBox(height: 8),
+                  _infoRow(Icons.info_outline, 'Container Status', status),
+                  const SizedBox(height: 8),
+                  _infoRow(Icons.check_circle_outline, 'Approval remarks', approval),
+                  const SizedBox(height: 8),
+                  _infoRow(Icons.note, 'Remarks', remarks),
+                  if (holdNotes.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    _infoRow(Icons.lock, 'Hold notes', holdNotes),
+                  ],
+                ],
+              ),
+            ),
         ],
       ),
     );
