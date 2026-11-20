@@ -196,7 +196,7 @@ class _LoginScreenState extends State<LoginScreen> with WidgetsBindingObserver {
             padding: const EdgeInsets.all(20),
             child: Column(
               children: [
-                SizedBox(height: size.height * 0.08),
+                SizedBox(height: size.height * 0.04),
                 ClipRRect(
                   borderRadius: BorderRadius.circular(12),
                   child: const TbsLogo(width: 240),
@@ -239,7 +239,17 @@ class _LoginScreenState extends State<LoginScreen> with WidgetsBindingObserver {
                     ),
                   ],
                 ),
-                SizedBox(height: size.height * 0.08),
+                const SizedBox(height: 10),
+                const Text(
+                  'CHECKER APP',
+                  style: TextStyle(
+                    fontSize: 36,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                SizedBox(height: size.height * 0.015),
                 Container(
                   decoration: BoxDecoration(
                     color: Colors.white,
