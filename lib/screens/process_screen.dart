@@ -221,7 +221,7 @@ class _ProcessScreenState extends State<ProcessScreen> {
       final user = context.read<AuthProvider>().user;
       if (user != null) {
         _checkerIdOut = user.id;
-        _checkerNameOut = user.username;
+        _checkerNameOut = user.fullName;
       }
     } else {
       // Initialize Gate IN fields from PreRecord
@@ -2268,6 +2268,24 @@ class _ProcessScreenState extends State<ProcessScreen> {
                     _buildTextField('', TextEditingController(text: _haulerOut),
                         enabled: false),
                     const SizedBox(height: 16),
+
+                    // Checker (Read-only, matching Gate IN)
+                    Text(
+                      'Checker',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        color: Colors.grey[700],
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    _buildTextField(
+                      '',
+                      TextEditingController(text: _checkerNameOut),
+                      enabled: false,
+                    ),
+                    const SizedBox(height: 16),
+
                     // GATE OUT FIELDS
                     _buildFieldLabel('Container No.', required: true),
                     const SizedBox(height: 4),
