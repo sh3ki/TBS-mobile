@@ -172,7 +172,7 @@ class _SplashScreenState extends State<SplashScreen> {
               ),
               const SizedBox(height: 28),
               const Text(
-                'TBS',
+                'TBS CONTAINER YARD',
                 style: TextStyle(
                   fontSize: 36,
                   fontWeight: FontWeight.w700,
@@ -184,7 +184,7 @@ class _SplashScreenState extends State<SplashScreen> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   const Text(
-                    'CONTAINER YARD MANAGEMENT',
+                    'MANAGEMENT SYSTEM',
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w400,
