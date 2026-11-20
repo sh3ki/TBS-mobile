@@ -23,7 +23,7 @@ class TbsApp extends StatelessWidget {
       ],
       child: MaterialApp(
         debugShowCheckedModeBanner: false,
-        title: 'TBS',
+        title: 'TBS Checker',
         theme: AppTheme.light,
         home: const SplashScreen(),
       ),
