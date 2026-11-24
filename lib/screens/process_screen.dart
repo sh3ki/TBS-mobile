@@ -948,6 +948,7 @@ class _ProcessScreenState extends State<ProcessScreen> {
       final results = await _gateService.searchAvailableContainers(
         username: user.username,
         searchTerm: query,
+        clientId: widget.record.clientId,
       );
 
       print('DEBUG: API returned ${results.length} results');
