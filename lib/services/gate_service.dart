@@ -107,10 +107,15 @@ class GateService {
   Future<List<Map<String, dynamic>>> searchAvailableContainers({
     required String username,
     required String searchTerm,
+    int? clientId,
   }) async {
     final response = await ApiService.get(
       '/mobile/gateinout/available-containers',
-      query: {'username': username, 'search': searchTerm},
+      query: {
+        'username': username,
+        'search': searchTerm,
+        if (clientId != null && clientId > 0) 'client_id': clientId.toString(),
+      },
     );
 
     if (!response.isSuccessCode || response.data['success'] != true) {
