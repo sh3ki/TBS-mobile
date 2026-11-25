@@ -212,6 +212,10 @@ class _ProcessScreenState extends State<ProcessScreen> {
       }
       _plateNoOut = widget.record.plateNo;
       _haulerOut = widget.record.hauler;
+      _clientNameOut = widget.record.clientName;
+      _clientIdOut = widget.record.clientId;
+      _selectedSizeTypeOut = widget.record.sizeTypeId;
+      _isoCodeOut.text = widget.record.isoCode;
       _outCacheKey = _buildOutCacheKey(
         plate: widget.record.plateNo,
         hauler: widget.record.hauler,
@@ -2270,23 +2274,6 @@ class _ProcessScreenState extends State<ProcessScreen> {
                         enabled: false),
                     const SizedBox(height: 16),
 
-                    // Checker (Read-only, matching Gate IN)
-                    Text(
-                      'Checker',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.grey[700],
-                      ),
-                    ),
-                    const SizedBox(height: 4),
-                    _buildTextField(
-                      '',
-                      TextEditingController(text: _checkerNameOut),
-                      enabled: false,
-                    ),
-                    const SizedBox(height: 16),
-
                     // GATE OUT FIELDS
                     _buildFieldLabel('Container No.', required: true),
                     const SizedBox(height: 4),
@@ -2500,27 +2487,6 @@ class _ProcessScreenState extends State<ProcessScreen> {
                         enabled: false),
                     const SizedBox(height: 16),
 
-                    // Checker (Read-only if already set)
-                    if (_checkerNameIn.isNotEmpty)
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Checker',
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w500,
-                              color: Colors.grey[700],
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          _buildTextField(
-                              '', TextEditingController(text: _checkerNameIn),
-                              enabled: false),
-                          const SizedBox(height: 16),
-                        ],
-                      ),
-
                     // Size/Type
                     _buildFieldLabel('Size/Type', required: true),
                     const SizedBox(height: 4),
@@ -2536,37 +2502,7 @@ class _ProcessScreenState extends State<ProcessScreen> {
                                 (opt) => opt.id == value,
                                 orElse: () => LookupItem(id: 0, label: '', extra: ''));
 
-                            // Hard-coded legacy mapping from Size/Type label -> ISO
-                            const Map<String, String> legacySizeToIso = {
-                              '20DC': '22G1',
-                              '20FR': '22P1',
-                              '20OT': '22U1',
-                              '20RF': '22R1',
-                              '20RH': '25R1',
-                              '40DC': '42G1',
-                              '40FR': '42P1',
-                              '40HC': '45G1',
-                              '40OT': '42U1',
-                              '40RH': '45R1',
-                              '45HC': 'L5G1',
-                            };
-
-                            String isoValue = '';
-                            if (item.label.isNotEmpty) {
-                              // Prefer exact mapping by label (e.g., '20DC')
-                              isoValue = legacySizeToIso[item.label] ?? '';
-                            }
-
-                            // If mapping not found, fall back to parsing label after '-' or use full label
-                            if (isoValue.isEmpty && item.label.isNotEmpty) {
-                              if (item.label.contains('-')) {
-                                final parts = item.label.split('-');
-                                isoValue = parts.isNotEmpty ? parts.last : item.label;
-                              } else {
-                                isoValue = item.label;
-                              }
-                            }
-
+                            final isoValue = item.extra.trim().toUpperCase();
                             if (isoValue.isNotEmpty) _isoCodeIn.text = isoValue;
                           }
                         });
@@ -2582,8 +2518,7 @@ class _ProcessScreenState extends State<ProcessScreen> {
                     _buildTextField(
                       '',
                       _isoCodeIn,
-                      onChanged: _handleIsoCodeInChange,
-                      textCapitalization: TextCapitalization.characters,
+                      enabled: false,
                     ),
                     const SizedBox(height: 16),
 
