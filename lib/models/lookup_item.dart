@@ -32,6 +32,7 @@ class LookupItem {
     return LookupItem(
       id: (json['s_id'] as num?)?.toInt() ?? 0,
       label: '$size$type',
+      extra: (json['iso_code'] ?? '').toString(),
     );
   }
 
